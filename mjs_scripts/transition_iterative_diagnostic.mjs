@@ -61,15 +61,27 @@ function analyzeTestData(testData, label) {
     .filter(v => !FINGER_BONE_RE.test(v.bone || ''));
   const smooth = testData.transitionSmooth;
   const events = smooth?.events || [];
-  const angularDistances = events.map(ev => ev.transitionAngularDistDeg).filter(d => d != null);
+  
+  const snapViolations = violations.filter(v => v.type === 'snap' || !v.type);
+  const accelViolations = violations.filter(v => v.type === 'accel_spike');
+  const jerkViolations  = violations.filter(v => v.type === 'jerk_spike');
+  const curveViolations = violations.filter(v => v.type === 'curvature');
+  const slideViolations = violations.filter(v => v.type === 'foot_slide');
 
   const totalViolations = violations.length;
   const byPhase = testData.violationsByPhase || { fadeIn: 0, steady: 0, fadeOut: 0 };
   const byBone = {};
   for (const v of violations) byBone[v.bone] = (byBone[v.bone] || 0) + 1;
   const boneCount = Object.keys(byBone).length;
-  const worstViolation = violations.length > 0
-    ? Math.max(...violations.map(v => v.angle || 0))
+  
+  const worstSnap = snapViolations.length > 0
+    ? Math.max(...snapViolations.map(v => v.angle || 0))
+    : 0;
+  const worstAccel = accelViolations.length > 0
+    ? Math.max(...accelViolations.map(v => v.accel || 0))
+    : 0;
+  const worstJerk = jerkViolations.length > 0
+    ? Math.max(...jerkViolations.map(v => v.jerk || 0))
     : 0;
 
   let totalFadeRatio = 0, totalFadeOutRatio = 0, totalSnap = 0;
@@ -100,12 +112,8 @@ function analyzeTestData(testData, label) {
     }
   }
 
-  const SMOOTH_THRESHOLD = 10;
   const passCount = events.filter(e => {
     if (!e.hasGesture) return true;
-    if (e.maxKeyDeltaDeg != null) {
-      return e.maxKeyDeltaDeg <= SMOOTH_THRESHOLD;
-    }
     return (e.fadeToSteadyRatio ?? 0) <= 3.0
         && (e.fadeOutToSteadyRatio ?? 0) <= 3.0
         && (e.returnSnapMaxDeg ?? 0) <= 3.0;
@@ -117,13 +125,20 @@ function analyzeTestData(testData, label) {
   return {
     label,
     totalViolations,
+    snapCount: snapViolations.length,
+    accelCount: accelViolations.length,
+    jerkCount: jerkViolations.length,
+    curveCount: curveViolations.length,
+    slideCount: slideViolations.length,
     violationsByPhase: byPhase,
     transitionViolations,
     steadyViolations: byPhase.steady || 0,
     transitionPct: pct,
     armViolations,
     boneCount,
-    worstViolation: +worstViolation.toFixed(2),
+    worstSnap: +worstSnap.toFixed(2),
+    worstAccel: +worstAccel.toFixed(1),
+    worstJerk: +worstJerk.toFixed(0),
     avgFadeRatio: ratioCount > 0 ? +(totalFadeRatio / ratioCount).toFixed(2) : null,
     avgFadeOutRatio: ratioCount > 0 ? +(totalFadeOutRatio / ratioCount).toFixed(2) : null,
     avgSnap: snapCount > 0 ? +(totalSnap / snapCount).toFixed(2) : null,
@@ -140,6 +155,9 @@ function analyzeTestData(testData, label) {
       fadeInMaxDeg: ev.fadeInMaxDegPerFrame,
       steadyMaxDeg: ev.steadyMaxDegPerFrame,
       fadeToSteadyRatio: ev.fadeToSteadyRatio,
+      fadeOutMaxDeg: ev.fadeOutMaxDegPerFrame ?? null,
+      fadeOutToSteadyRatio: ev.fadeOutToSteadyRatio ?? null,
+      returnSnapMaxDeg: ev.returnSnapMaxDeg ?? null,
       angularDistDeg: ev.transitionAngularDistDeg ?? null,
       maxKeyDeltaDeg: ev.maxKeyDeltaDeg ?? null,
       hipFadeIn: ev.hipPosMaxDeltaFadeIn ?? null,
@@ -171,12 +189,13 @@ async function main() {
     const r = analyzeTestData(testData, label);
     if (r) {
       const vp = r.violationsByPhase;
-      console.log(`    violations: ${r.totalViolations} (arms: ${r.armViolations}, bones: ${r.boneCount}, worst: ${r.worstViolation}°)`);
+      console.log(`    violations: ${r.totalViolations} (snaps: ${r.snapCount}, accels: ${r.accelCount}, jerk: ${r.jerkCount}, curve: ${r.curveCount}, slide: ${r.slideCount})`);
       console.log(`    by phase:   fadeIn=${vp.fadeIn} steady=${vp.steady} fadeOut=${vp.fadeOut} (transition=${r.transitionPct}%)`);
-      console.log(`    fadeRatio: avg=${r.avgFadeRatio} max=${r.maxFadeRatio}  snap: avg=${r.avgSnap}° max=${r.maxSnap}°`);
-      console.log(`    events: ${r.passCount}/${r.totalEvents} pass`);
+      console.log(`    extremes:   worst_snap=${r.worstSnap}°  worst_accel=${r.worstAccel}deg/s²  worst_jerk=${r.worstJerk}deg/s³`);
+      console.log(`    fadeRatio:  avg=${r.avgFadeRatio} max=${r.maxFadeRatio}  snap: avg=${r.avgSnap}° max=${r.maxSnap}°`);
+      console.log(`    events:     ${r.passCount}/${r.totalEvents} pass`);
       if (r.topBones.length) {
-        console.log(`    top bones: ${r.topBones.map(([n, c]) => `${n}=${c}`).join(', ')}`);
+        console.log(`    top bones:  ${r.topBones.map(([n, c]) => `${n}=${c}`).join(', ')}`);
       }
       results.push(r);
     } else {
@@ -185,20 +204,19 @@ async function main() {
   }
 
   // ── Summary Table ──────────────────────────────────────────────────────
-  console.log('\n' + '═'.repeat(110));
+  console.log('\n' + '═'.repeat(140));
   console.log('RESULTS');
-  console.log('═'.repeat(110));
-  console.log('Method          Violations  Arms      Bones  Worst°  TxPct   FadeRatio  Snap°    Pass');
-  console.log('──────────────  ──────────  ────────  ─────  ──────  ──────  ─────────  ───────  ─────');
+  console.log('═'.repeat(140));
+  console.log('Method          Snaps  Accels  Jerks  Curves  Slides  Bones  Worst°  WorstAccel  WorstJerk   TxPct   Pass');
+  console.log('──────────────  ─────  ──────  ─────  ──────  ──────  ─────  ──────  ──────────  ─────────   ──────  ─────');
   for (const r of results) {
-    const fr = r.avgFadeRatio != null ? r.avgFadeRatio.toFixed(2) : 'N/A';
-    const sn = r.avgSnap != null ? r.avgSnap.toFixed(2) : 'N/A';
     const txp = r.transitionPct;
     console.log(
-      `${String(r.label).padEnd(14)}  ${String(r.totalViolations).padStart(10)}  ` +
-      `${String(r.armViolations).padStart(8)}  ${String(r.boneCount).padStart(5)}  ` +
-      `${String(r.worstViolation).padStart(6)}  ${String(txp).padStart(6)}  ${fr.padStart(9)}  ${sn.padStart(7)}  ` +
-      `${r.passCount}/${r.totalEvents}`
+      `${String(r.label).padEnd(14)}  ${String(r.snapCount).padStart(5)}  ` +
+      `${String(r.accelCount).padStart(6)}  ${String(r.jerkCount).padStart(5)}  ` +
+      `${String(r.curveCount).padStart(6)}  ${String(r.slideCount).padStart(6)}  ` +
+      `${String(r.boneCount).padStart(5)}  ${String(r.worstSnap).padStart(6)}  ${String(r.worstAccel).padStart(10)}  ` +
+      `${String(r.worstJerk).padStart(9)}   ${String(txp).padStart(6)}  ${r.passCount}/${r.totalEvents}`
     );
   }
 
@@ -206,18 +224,19 @@ async function main() {
   const vrmaResult = results.find(r => r.label.startsWith('vrma'));
   if (vrmaResult?.perEvent) {
     console.log('\n── Per-event transition metrics (vrma) ──');
-    console.log('Ev  Clip      Gesture   FadeIn°  Steady°   Ratio  AngDist°  maxKey°  Pass');
-    console.log('──  ────────  ────────  ───────  ───────  ──────  ────────  ───────  ────');
+    console.log('Ev  Clip      FadeIn°  Steady°  FadeOut°  FRatio  FORatio   Snap°  maxKey°  Pass');
+    console.log('──  ────────  ───────  ───────  ────────  ──────  ───────  ──────  ───────  ────');
     for (const ev of vrmaResult.perEvent) {
       const clip = ev.clip.padEnd(8);
-      const gest = ev.hasGesture ? 'YES' : 'no';
       const fi = ev.fadeInMaxDeg != null ? ev.fadeInMaxDeg.toFixed(1).padStart(7) : '    N/A';
       const st = ev.steadyMaxDeg != null ? ev.steadyMaxDeg.toFixed(1).padStart(7) : '    N/A';
+      const fo = ev.fadeOutMaxDeg != null ? ev.fadeOutMaxDeg.toFixed(1).padStart(8) : '    N/A';
       const rt = ev.fadeToSteadyRatio != null ? ev.fadeToSteadyRatio.toFixed(1).padStart(6) : '   N/A';
-      const ad = ev.angularDistDeg != null ? ev.angularDistDeg.toFixed(1).padStart(8) : '    N/A';
+      const or = ev.fadeOutToSteadyRatio != null ? ev.fadeOutToSteadyRatio.toFixed(1).padStart(7) : '    N/A';
+      const sn = ev.returnSnapMaxDeg != null ? ev.returnSnapMaxDeg.toFixed(1).padStart(6) : '   N/A';
       const mk = ev.maxKeyDeltaDeg != null ? ev.maxKeyDeltaDeg.toFixed(1).padStart(7) : '    N/A';
-      const pass = ev.hasGesture ? (ev.maxKeyDeltaDeg != null ? (ev.maxKeyDeltaDeg <= 10 ? 'PASS' : 'SNAP') : 'N/A') : 'skip';
-      console.log(`${String(vrmaResult.perEvent.indexOf(ev)).padStart(2)}  ${clip}  ${gest.padEnd(8)}  ${fi}  ${st}  ${rt}  ${ad}  ${mk}  ${pass}`);
+      const pass = (ev.fadeToSteadyRatio ?? 0) <= 3 && (ev.fadeOutToSteadyRatio ?? 0) <= 3 && (ev.returnSnapMaxDeg ?? 0) <= 3 ? 'PASS' : 'SNAP';
+      console.log(`${String(vrmaResult.perEvent.indexOf(ev)).padStart(2)}  ${clip}  ${fi}  ${st}  ${fo}  ${rt}  ${or}  ${sn}  ${mk}  ${pass}`);
     }
   }
 

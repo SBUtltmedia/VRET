@@ -25,7 +25,7 @@ export class TransitionGenerator {
    * animated in the previous AnimationGroup.
    *
    * @param {AnimationGroup} targetAnim — the animation we are transitioning INTO
-   * @returns {Object} { [boneName]: Quaternion }
+   * @returns {Object} { [boneName]: { rotation: Quaternion, position: Vector3 } }
    */
   snapshotPose(targetAnim) {
     const pose = {};
@@ -33,16 +33,22 @@ export class TransitionGenerator {
     for (const ta of targetAnim.targetedAnimations) {
       const bone = ta.target;
       if (!bone?.name) continue;
+      
+      pose[bone.name] ??= {};
+
       // Get the ACTUAL current rotation from the bone itself
       const q = bone.rotationQuaternion;
       if (q) {
-        pose[bone.name] = q.clone();
+        pose[bone.name].rotation = q.clone();
       } else if (bone.rotation) {
         const euler = bone.rotation;
-        pose[bone.name] = BABYLON.Quaternion.RotationYawPitchRoll(euler.y, euler.x, euler.z);
+        pose[bone.name].rotation = BABYLON.Quaternion.RotationYawPitchRoll(euler.y, euler.x, euler.z);
       } else {
-        pose[bone.name] = new BABYLON.Quaternion();
+        pose[bone.name].rotation = new BABYLON.Quaternion();
       }
+
+      // Get the ACTUAL current position from the bone itself
+      pose[bone.name].position = bone.position.clone();
     }
     return pose;
   }
@@ -66,21 +72,47 @@ export class TransitionGenerator {
   }
 
   /**
+   * Evaluate a specific bone's position at a specific frame index in an AnimationGroup.
+   */
+  evaluateBonePositionAtFrame(animGroup, targetBone, frameIndex) {
+    for (const ta of animGroup.targetedAnimations) {
+      if (ta.target === targetBone) {
+        const anim = ta.animation;
+        if (!anim || anim.targetProperty !== 'position') continue;
+        const keys = anim.getKeys();
+        if (!keys || keys.length === 0) continue;
+        const idx = Math.min(frameIndex, keys.length - 1);
+        return keys[idx].value.clone();
+      }
+    }
+    // Fallback: actual bone position
+    return targetBone.position.clone();
+  }
+
+  /**
    * Evaluate a single frame of an AnimationGroup at a given frame index.
-   * Returns: { [boneName]: Quaternion }
+   * Returns: { [boneName]: { rotation: Quaternion, position: Vector3 } }
    */
   evaluateFrame(animGroup, frameIndex) {
     const pose = {};
     for (const ta of animGroup.targetedAnimations) {
       const bone = ta.target;
       if (!bone?.name) continue;
+      pose[bone.name] ??= {};
+      
       const anim = ta.animation;
-      if (!anim || anim.targetProperty !== 'rotationQuaternion') continue;
+      if (!anim) continue;
+
       const keys = anim.getKeys();
       if (!keys || keys.length === 0) continue;
       const idx = Math.min(frameIndex, keys.length - 1);
-      const key = keys[idx];
-      pose[bone.name] = key.value.clone();
+      const val = keys[idx].value;
+
+      if (anim.targetProperty === 'rotationQuaternion') {
+        pose[bone.name].rotation = val.clone();
+      } else if (anim.targetProperty === 'position') {
+        pose[bone.name].position = val.clone();
+      }
     }
     return pose;
   }
@@ -109,9 +141,14 @@ export class TransitionGenerator {
       let totalDist = 0;
       let matchedBones = 0;
       const perBone = {};
-      for (const [boneName, qSrc] of Object.entries(sourcePose)) {
-        const qTgt = framePose[boneName];
+      for (const [boneName, data] of Object.entries(sourcePose)) {
+        const qSrc = data.rotation;
+        if (!qSrc) continue;
+
+        const targetData = framePose[boneName];
+        const qTgt = targetData?.rotation;
         if (!qTgt) continue;
+
         const dot = Math.abs(BABYLON.Quaternion.Dot(qSrc, qTgt));
         const angle = 2 * Math.acos(Math.min(1, dot));
         totalDist += angle * angle;
@@ -165,6 +202,27 @@ export class TransitionGenerator {
   }
 
   /**
+   * Generate N+1 transition keyframes for one bone's position using
+   * linear interpolation (Lerp).
+   */
+  _generateBonePositionKeys(pStart, pEnd, numFrames) {
+    const keys = [];
+    if (numFrames <= 1) {
+      keys.push({ frame: 0, value: pStart.clone() });
+      keys.push({ frame: 1, value: pEnd.clone() });
+      return keys;
+    }
+
+    for (let i = 0; i <= numFrames; i++) {
+      const t = i / numFrames;
+      const et = this._ease(t);
+      const p = BABYLON.Vector3.Lerp(pStart, pEnd, et);
+      keys.push({ frame: i, value: p });
+    }
+    return keys;
+  }
+
+  /**
    * Compute tangent quaternions from an animation group at a given frame.
    */
   _computeTangents(animGroup, boneNames, frameIndex, delta = 1) {
@@ -199,11 +257,11 @@ export class TransitionGenerator {
   /**
    * Build a transition AnimationGroup from a start pose to an end state.
    *
-   * @param {Object} startPose — { [boneName]: Quaternion }
+   * @param {Object} startPose — { [boneName]: { rotation: Quaternion, position: Vector3 } }
    * @param {AnimationGroup} targetAnim — the animation we are transitioning INTO
    * @param {number} entryFrame — the frame in targetAnim to match
    * @param {number} numFrames — transition duration
-   * @param {Object} [explicitEndPose] — optional { [boneName]: Quaternion } to use as target
+   * @param {Object} [explicitEndPose] — optional { [boneName]: { rotation: Quaternion, position: Vector3 } } to use as target
    * @returns {AnimationGroup}
    */
   buildTransition(startPose, targetAnim, entryFrame, numFrames, explicitEndPose = null) {
@@ -214,21 +272,41 @@ export class TransitionGenerator {
       const bone = ta.target;
       if (!bone?.name) continue;
 
-      const qStart = startPose[bone.name];
-      const qEnd = entryPose[bone.name];
-      if (!qStart || !qEnd) continue;
+      const startData = startPose[bone.name];
+      const endData = entryPose[bone.name];
+      if (!startData || !endData) continue;
 
-      const keys = this._generateBoneKeys(qStart, qEnd, numFrames);
-
-      const anim = new BABYLON.Animation(
-        `tx-${bone.name}`,
-        'rotationQuaternion',
-        60,
-        BABYLON.Animation.ANIMATIONTYPE_QUATERNION,
-        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-      );
-      anim.setKeys(keys);
-      txGroup.addTargetedAnimation(anim, bone);
+      if (ta.animation.targetProperty === 'rotationQuaternion') {
+        const qStart = startData.rotation;
+        const qEnd = endData.rotation;
+        if (qStart && qEnd) {
+          const keys = this._generateBoneKeys(qStart, qEnd, numFrames);
+          const anim = new BABYLON.Animation(
+            `tx-rot-${bone.name}`,
+            'rotationQuaternion',
+            60,
+            BABYLON.Animation.ANIMATIONTYPE_QUATERNION,
+            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+          );
+          anim.setKeys(keys);
+          txGroup.addTargetedAnimation(anim, bone);
+        }
+      } else if (ta.animation.targetProperty === 'position') {
+        const pStart = startData.position;
+        const pEnd = endData.position;
+        if (pStart && pEnd) {
+          const keys = this._generateBonePositionKeys(pStart, pEnd, numFrames);
+          const anim = new BABYLON.Animation(
+            `tx-pos-${bone.name}`,
+            'position',
+            60,
+            BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+          );
+          anim.setKeys(keys);
+          txGroup.addTargetedAnimation(anim, bone);
+        }
+      }
     }
 
     return txGroup;
@@ -251,7 +329,7 @@ export class TransitionGenerator {
       console.log(`[TransitionGenerator] Best match: frame ${entryFrame}, dist ${matchDist.toFixed(4)} rad (max ${maxAngleDeg.toFixed(1)}°)`);
     }
 
-    const txGroup = this.buildTransition(currentPose, gestureAnim, entryFrame, transitionFrames, currentAnim);
+    const txGroup = this.buildTransition(currentPose, gestureAnim, entryFrame, transitionFrames);
     const txSeconds = transitionFrames / 60;
 
     return { txGroup, entryFrame, txSeconds, currentPose, maxAngleDeg };

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Transition Sequence Player</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="icon" href="data:,">
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.js"></script>
+  <script>window.LOADERS = BABYLON; window.BABYLON = BABYLON;</script>
+  <script src="https://xuhuisheng.github.io/babylonjs-vrm/babylon-vrm-loader.js"></script>
+  <style>
+    html, body, #renderCanvas { width:100%; height:100%; margin:0; padding:0; overflow:hidden; background:#05050a; }
+    #overlay {
+      position:absolute; top:20px; left:20px;
+      color:#aef; font:14px monospace; background:rgba(0,0,0,0.6);
+      padding:15px; border-radius:8px; border:1px solid rgba(255,255,255,0.1);
+      pointer-events:none;
+    }
+    #overlay .val { color:#fff; font-weight:bold; }
+    #overlay .dim { opacity:0.5; }
+    #help {
+      position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+      color:rgba(255,255,255,0.4); font:12px monospace;
+      background:rgba(0,0,0,0.4); padding:8px 16px; border-radius:6px; pointer-events:none; user-select:none;
+    }
+    #status-msg {
+      position:absolute; bottom:60px; left:50%; transform:translateX(-50%);
+      color:rgba(255,255,255,0.7); font:13px monospace; text-align:center;
+      background:rgba(0,0,0,0.5); padding:6px 14px; border-radius:6px; pointer-events:none;
+    }
+  </style>
+</head>
+<body data-status="loading">
+  <canvas id="renderCanvas"></canvas>
+
+  <div id="overlay">
+    <div>Clip: <span id="ui-clip" class="val">-</span></div>
+    <div>Step: <span id="ui-step" class="val">-</span></div>
+    <div>Pos: <span id="ui-pos" class="val">0, 0, 0</span></div>
+    <div>Cam: <span id="ui-cam" class="val">0, 0</span></div>
+    <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1)">
+      Snap: <span id="ui-snap" class="val">0.00°</span>
+      PosSnap: <span id="ui-possnap" class="val">0.000m</span>
+    </div>
+  </div>
+
+  <div id="help">WASD move · Q/E up/down · Mouse orbit · Scroll zoom · R reset view · Click to start</div>
+  <div id="status-msg">Initializing...</div>
+
+  <script type="module">
+    import { Stage } from "./js/Stage.js";
+    import { Character } from "./js/Character.js";
+    import { TimelineManager } from "./js/Timeline.js";
+
+    BABYLON.TransformNode.prototype.getTotalVertices ??= () => 0;
+
+    const IS_TEST = new URLSearchParams(location.search).has('test');
+    const PARAMS = Object.fromEntries(new URLSearchParams(location.search));
+    const ui = {
+      clip: document.getElementById('ui-clip'),
+      step: document.getElementById('ui-step'),
+      pos: document.getElementById('ui-pos'),
+      cam: document.getElementById('ui-cam'),
+      snap: document.getElementById('ui-snap'),
+      possnap: document.getElementById('ui-possnap'),
+      status: document.getElementById('status-msg'),
+    };
+
+    const DEFAULT_POOL = [
+      '16_19.vrma', '18_08.vrma', '22_18.vrma', '02_01.vrma',
+      '14_24.vrma', '13_27.vrma', '105_13.vrma', '105_32.vrma',
+      '111_37.vrma', '142_05.vrma',
+    ];
+
+    function shuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    async function init() {
+      const stage = new Stage('renderCanvas');
+      const scene = stage.scene;
+      ui.status.textContent = 'Loading VRM...';
+
+      const beforeCount = scene.metadata?.vrmManagers?.length ?? 0;
+      const existingRoots = new Set(scene.rootNodes.map(n => n.uniqueId));
+
+      await BABYLON.SceneLoader.ImportMeshAsync(null, '../models/Seed-san.vrm', null, scene);
+
+      const mgr = (scene.metadata?.vrmManagers ?? []).slice(beforeCount).find(m => m.isVRM1) ?? scene.metadata?.vrmManagers?.[beforeCount];
+      const root = scene.rootNodes.find(n => !existingRoots.has(n.uniqueId));
+      if (!mgr || !root) {
+        ui.status.textContent = 'ERROR: VRM load failed';
+        document.body.setAttribute('data-status', 'error');
+        return;
+      }
+
+      const character = new Character('test', root, mgr);
+      const actors = { test: character };
+      const timeline = new TimelineManager(stage, actors);
+
+      // Pick pair
+      let pickA, pickB;
+      if (PARAMS.pair) {
+        const parts = PARAMS.pair.split(',').map(s => s.trim());
+        pickA = parts[0].includes('.') ? parts[0] : parts[0] + '.vrma';
+        pickB = parts[1].includes('.') ? parts[1] : parts[1] + '.vrma';
+        if (!pickB) {
+          ui.status.textContent = `ERROR: need 2 clips in ?pair=, got "${PARAMS.pair}"`;
+          document.body.setAttribute('data-status', 'error');
+          return;
+        }
+      } else {
+        const pool = PARAMS.pool ? PARAMS.pool.split(',').map(s => s.trim()) : DEFAULT_POOL;
+        if (pool.length < 2) {
+          ui.status.textContent = `ERROR: need >=2 in pool, got ${pool.length}`;
+          document.body.setAttribute('data-status', 'error');
+          return;
+        }
+        const shuffled = shuffle([...pool]);
+        pickA = shuffled[0];
+        pickB = shuffled[1];
+      }
+
+      // Detect or infer transition VRMA
+      const txName = `tx_${pickA.replace('.vrma','')}_to_${pickB.replace('.vrma','')}.vrma`;
+      let hasTransition = false;
+      const explicitTx = PARAMS.transition;
+      if (explicitTx) {
+        hasTransition = true;
+      } else {
+        try {
+          // Use ../vrma/ since page is at /plays/ and VRMA files are at /vrma/
+          const resp = await fetch(`../vrma/${txName}`, { method: 'HEAD' });
+          hasTransition = resp.ok;
+        } catch { hasTransition = false; }
+      }
+      const useTx = hasTransition ? (explicitTx || txName) : null;
+
+      const SEQUENCE = [
+        { name: `A-${pickA.replace('.vrma','')}`, clip: `vrma/${pickA}`, from: 0, blend: 0 },
+      ];
+      if (useTx) {
+        SEQUENCE.push({ name: `T-${useTx.replace('.vrma','')}`, clip: `vrma/${useTx}`, from: 0, blend: 0 });
+      }
+      SEQUENCE.push({ name: `B-${pickB.replace('.vrma','')}`, clip: `vrma/${pickB}`, from: 0, blend: useTx ? 0 : 200 });
+
+      const label = useTx ? `${pickA} → ${useTx} → ${pickB}` : `${pickA} → ${pickB}`;
+      console.log(`[test] Sequence: ${SEQUENCE.map(s => s.name).join(' -> ')}`);
+      ui.status.textContent = `Ready: ${label} — Click to play`;
+
+      // Test metrics
+      let testData = {
+        maxSnapDeg: 0, maxPosSnap: 0, totalFramesAdvanced: 0,
+        retargetSuccess: false, eventsCompleted: '0 of 0',
+        lastRot: {}, lastHipsPos: null, lastFrame: null,
+        violations: [], _frameCount: 0,
+        _lastClip: '', _baselineFrames: 0,
+        posHistory: [],
+        originHipsPos: null, firstClip: '',
+      };
+      testData.eventsCompleted = `0 of ${SEQUENCE.length}`;
+
+      const TRACKED = [];
+      for (const key of Object.keys(mgr.humanoidBone || {})) {
+        if (key !== 'nodeMap' && !/finger|thumb|toe|eye/i.test(key)) TRACKED.push(key);
+      }
+
+      scene.onAfterRenderObservable.add(() => {
+        if (!mgr?.humanoidBone) return;
+
+        const curClip = document.body.getAttribute('data-current') || '';
+        if (curClip !== testData._lastClip) {
+          testData._lastClip = curClip;
+          testData._baselineFrames = 5;
+          testData.lastHipsPos = null;
+          testData.lastRot = {};
+        }
+        if (testData._baselineFrames > 0) {
+          testData.lastHipsPos = null;
+          testData.lastRot = {};
+          testData._baselineFrames--;
+          return;
+        }
+
+        const hips = mgr.humanoidBone.hips;
+        if (hips) {
+          const pos = hips.getAbsolutePosition();
+          if (!testData.firstClip) testData.firstClip = curClip;
+          if (!testData.originHipsPos) testData.originHipsPos = pos.clone();
+          if (testData._frameCount % 5 === 0) {
+            testData.posHistory.push({ frame: testData._frameCount, clip: curClip, x: +pos.x.toFixed(4), y: +pos.y.toFixed(4), z: +pos.z.toFixed(4) });
+          }
+          if (testData.lastHipsPos) {
+            const d = BABYLON.Vector3.Distance(pos, testData.lastHipsPos);
+            if (d > testData.maxPosSnap) testData.maxPosSnap = d;
+          }
+          testData.lastHipsPos = pos.clone();
+        }
+        testData._frameCount++;
+
+        for (const key of TRACKED) {
+          const bone = mgr.humanoidBone[key];
+          if (!bone?.rotationQuaternion) continue;
+          const q = bone.rotationQuaternion;
+          if (testData.lastRot[key]) {
+            const dot = Math.abs(BABYLON.Quaternion.Dot(testData.lastRot[key], q));
+            const angle = 2 * Math.acos(Math.min(1, dot)) * 57.3;
+            if (angle > testData.maxSnapDeg) testData.maxSnapDeg = angle;
+            if (angle >= 15) testData.violations.push({ bone: key, deg: +angle.toFixed(2) });
+          }
+          testData.lastRot[key] = q.clone();
+        }
+
+        if (character.curGroups?.length) {
+          const anim = character.curGroups[0].animatables?.[0];
+          if (anim) {
+            const frame = anim.masterFrame ?? 0;
+            if (testData.lastFrame !== null && frame > testData.lastFrame) {
+              testData.totalFramesAdvanced += frame - testData.lastFrame;
+            }
+            testData.lastFrame = frame;
+            testData.retargetSuccess = true;
+          }
+        }
+
+        // Update UI
+        const curClipName = document.body.getAttribute('data-current') || '';
+        const stepIdx = SEQUENCE.findIndex(s => s.name === curClipName);
+        ui.clip.textContent = curClipName || '-';
+        ui.step.textContent = stepIdx >= 0 ? `${stepIdx + 1} of ${SEQUENCE.length}` : '-';
+        if (hips) {
+          const p = hips.getAbsolutePosition();
+          ui.pos.textContent = `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}`;
+        }
+        ui.snap.textContent = `${testData.maxSnapDeg.toFixed(2)}°`;
+        ui.possnap.textContent = `${testData.maxPosSnap.toFixed(3)}m`;
+      });
+
+      // UI Camera + position updates
+      scene.onBeforeRenderObservable.add(() => {
+        stage.moveSpeed(scene.deltaTime / 1000);
+        ui.cam.textContent =
+          `${(stage.camera.alpha * 57.3).toFixed(0)}°, ${(stage.camera.beta * 57.3).toFixed(0)}°`;
+      });
+
+      // Click to start (auto-start if ?test)
+      const startPlayback = async () => {
+        stage.startRenderLoop();
+        document.body.setAttribute('data-status', 'playing');
+        ui.status.textContent = `Playing: ${label}`;
+
+        await timeline.playSequential('test', SEQUENCE);
+
+        testData.eventsCompleted = `${SEQUENCE.length} of ${SEQUENCE.length}`;
+        document.body.setAttribute('data-status', 'complete');
+        ui.status.textContent = 'Complete.';
+
+        const endPos = timeline._getHipsWorldPos(character);
+        const endRotRad = timeline._getHipsWorldRotationY(character);
+        const endRotDeg = +(endRotRad * 57.3).toFixed(2);
+
+        // Drift
+        let totalDriftXY = 0;
+        if (testData.originHipsPos && endPos) {
+          totalDriftXY = Math.sqrt(
+            (endPos.x - testData.originHipsPos.x) ** 2 + (endPos.z - testData.originHipsPos.z) ** 2
+          );
+        }
+
+        window.__TEST_DATA = {
+          completed: true,
+          pair: [pickA, pickB],
+          maxSnapDeg: +testData.maxSnapDeg.toFixed(2),
+          maxPosSnap: +testData.maxPosSnap.toFixed(4),
+          totalFramesAdvanced: +testData.totalFramesAdvanced.toFixed(1),
+          retargetSuccess: testData.retargetSuccess,
+          eventsCompleted: testData.eventsCompleted,
+          violationCount: testData.violations.length,
+          violations: testData.violations.slice(0, 10),
+          endHipsPos: endPos ? { x: +endPos.x.toFixed(4), y: +endPos.y.toFixed(4), z: +endPos.z.toFixed(4) } : null,
+          endHipsRotY: endRotDeg,
+          drift: { totalDriftXY: +totalDriftXY.toFixed(4), posHistoryCount: testData.posHistory.length },
+        };
+
+        const passFlags = {
+          snap: testData.maxSnapDeg < 15,
+          pos: testData.maxPosSnap < 0.05,
+          advance: testData.totalFramesAdvanced > 0,
+          retarget: testData.retargetSuccess,
+          events: testData.eventsCompleted === `${SEQUENCE.length} of ${SEQUENCE.length}`,
+        };
+        const passStr = Object.values(passFlags).every(Boolean) ? 'PASS' : 'FAIL';
+        const failReasons = Object.entries(passFlags).filter(([,v]) => !v).map(([k]) => k).join(', ');
+        console.log(`[test] ${passStr} — snap ${testData.maxSnapDeg}° pos ${testData.maxPosSnap}m frames ${testData.totalFramesAdvanced}` +
+          (failReasons ? ` (${failReasons})` : ''));
+        console.log('[test] Result:', JSON.stringify(window.__TEST_DATA, null, 2));
+
+        ui.status.innerHTML =
+          `<b style="color:${passStr==='PASS'?'#4f4':'#f44'}">${passStr}</b> — ` +
+          `${testData.maxSnapDeg}° snap, ${testData.maxPosSnap.toFixed(3)}m pos — ` +
+          `end: (${endPos?.x.toFixed(2)||'?'}, ${endPos?.y.toFixed(2)||'?'}, ${endPos?.z.toFixed(2)||'?'}) ${endRotDeg}° yaw`;
+      };
+
+      if (IS_TEST) {
+        setTimeout(startPlayback, 500);
+      } else {
+        window.addEventListener('click', startPlayback, { once: true });
+      }
+    }
+
+    init().catch(err => {
+      console.error(err);
+      ui.status.textContent = 'Error: ' + err.message;
+      document.body.setAttribute('data-status', 'error');
+    });
+  </script>
+</body>
+</html>

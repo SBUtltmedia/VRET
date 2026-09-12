@@ -25,84 +25,120 @@
       "description": "Window down all the way. Hands on the wheel. Now.",
       "audio": "qwenTTS/output_custom_voice_0.wav",
       "lipSync": "qwenTTS/lipsync/traffic_00.json",
-      "clip": "vrma/02_01.vrma"
+      "clip": "vrma/13_27.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 1.2, "y": 0, "z": 0.3 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     },
     {
       "start": 4.92,  "duration": 3.04,  "actor": "jordan",
       "description": "What? I'm already late.",
       "audio": "qwenTTS/output_custom_voice_1.wav",
       "lipSync": "qwenTTS/lipsync/traffic_01.json",
-      "clip": "vrma/05_01.vrma"
+      "clip": "vrma/18_08.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 0, "y": 0, "z": 0 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     },
     {
       "start": 8.96,  "duration": 5.36,  "actor": "officer",
       "description": "I said both hands, son. Put that right hand where I can see it.",
       "audio": "qwenTTS/output_custom_voice_2.wav",
       "lipSync": "qwenTTS/lipsync/traffic_02.json",
-      "clip": "vrma/08_05.vrma"
+      "clip": "vrma/14_24.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 1.2, "y": 0, "z": 0.3 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     },
     {
       "start": 15.32, "duration": 7.36,  "actor": "jordan",
       "description": "It's in my lap, man. I'm just trying to get my phone. I have rights, you know. Why did you even pull me over?",
       "audio": "qwenTTS/output_custom_voice_3.wav",
       "lipSync": "qwenTTS/lipsync/traffic_03.json",
-      "clip": "vrma/09_01.vrma"
+      "clip": "vrma/13_04.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 0, "y": 0, "z": 0 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     },
     {
       "start": 23.68, "duration": 8.24,  "actor": "officer",
       "description": "You're going to keep your hands on that wheel and stop reaching into your lap. Is there a weapon in this vehicle?",
       "audio": "qwenTTS/output_custom_voice_4.wav",
       "lipSync": "qwenTTS/lipsync/traffic_04.json",
-      "clip": "vrma/08_07.vrma"
+      "clip": "vrma/18_10.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 1.2, "y": 0, "z": 0.3 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     },
     {
       "start": 32.92, "duration": 6.32,  "actor": "jordan",
       "description": "A weapon? Are you serious? I'm an honor student. I don't have a weapon. I'm just reaching for my—",
       "audio": "qwenTTS/output_custom_voice_5.wav",
       "lipSync": "qwenTTS/lipsync/traffic_05.json",
-      "clip": "vrma/02_03.vrma"
+      "clip": "vrma/13_05.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 0, "y": 0, "z": 0 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     },
     {
       "start": 40.24, "duration": 5.76,  "actor": "officer",
       "description": "DON'T REACH! Every time you move your hand off that wheel, you're making a mistake. Do you understand me?",
       "audio": "qwenTTS/output_custom_voice_6.wav",
       "lipSync": "qwenTTS/lipsync/traffic_06.json",
-      "clip": "vrma/07_12.vrma"
+      "clip": "vrma/22_18.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 1.2, "y": 0, "z": 0.3 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     },
     {
       "start": 47.0,  "duration": 3.92,  "actor": "jordan",
       "description": "Look, I'll just show you my ID so we can be done!",
       "audio": "qwenTTS/output_custom_voice_7.wav",
       "lipSync": "qwenTTS/lipsync/traffic_07.json",
-      "clip": "vrma/104_02.vrma"
+      "clip": "vrma/105_13.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 0, "y": 0, "z": 0 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     },
     {
       "start": 51.92, "duration": 6.08,  "actor": "officer",
       "description": "STAY STILL! DON'T MOVE! Hands on the ceiling! Get your hands up on the ceiling of the car right now!",
       "audio": "qwenTTS/output_custom_voice_8.wav",
       "lipSync": "qwenTTS/lipsync/traffic_08.json",
-      "clip": "vrma/104_44.vrma"
+      "clip": "vrma/22_21.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 1.3, "y": 0, "z": 0.4 },
+      "boxRotation": { "x": 0, "y": 5, "z": 0 }
     },
     {
       "start": 59.0,  "duration": 5.20,  "actor": "jordan",
       "description": "I... I was just getting my wallet. My hands are up. Look. My hands are up.",
       "audio": "qwenTTS/output_custom_voice_9.wav",
       "lipSync": "qwenTTS/lipsync/traffic_09.json",
-      "clip": "vrma/02_04.vrma"
+      "clip": "vrma/105_32.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 0, "y": 0, "z": 0 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     },
     {
       "start": 65.2,  "duration": 9.92,  "actor": "officer",
       "description": "Slowly... use your left hand to open the door from the outside handle. Keep the other hand on the ceiling. If you drop that hand, we're going to have a very different conversation.",
       "audio": "qwenTTS/output_custom_voice_10.wav",
       "lipSync": "qwenTTS/lipsync/traffic_10.json",
-      "clip": "vrma/07_01.vrma"
+      "clip": "vrma/111_37.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 1.3, "y": 0, "z": 0.4 },
+      "boxRotation": { "x": 0, "y": 5, "z": 0 }
     },
     {
       "start": 76.12, "duration": 5.04,  "actor": "jordan",
       "description": "Okay. Okay. I'm opening it. Don't... please don't do anything. I'm opening the door.",
       "audio": "qwenTTS/output_custom_voice_11.wav",
       "lipSync": "qwenTTS/lipsync/traffic_11.json",
-      "clip": "vrma/104_31.vrma"
+      "clip": "vrma/142_05.vrma",
+      "speed": 0.75,
+      "boxPosition": { "x": 0, "y": 0, "z": 0 },
+      "boxRotation": { "x": 0, "y": 0, "z": 0 }
     }
   ]
 }

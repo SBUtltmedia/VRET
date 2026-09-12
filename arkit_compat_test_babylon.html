@@ -21,10 +21,19 @@
       position: fixed; bottom: 20px; left: 20px;
       background: rgba(0,0,0,0.8); padding: 15px; border-radius: 5px;
       z-index: 100; color: white; font-family: monospace;
+      display: flex; flex-direction: column; gap: 10px;
     }
+    .btn-row { display: flex; gap: 5px; align-items: center; }
+    button {
+      background: #444; color: white; border: 1px solid #666;
+      padding: 5px 10px; cursor: pointer; font-family: monospace;
+    }
+    button:hover { background: #555; }
+    button:active { background: #222; }
+    #index-display { font-size: 0.9em; color: #aaa; margin: 0 5px; min-width: 60px; text-align: center; }
     select {
       background: #333; color: white; border: 1px solid #666;
-      padding: 5px; font-family: monospace; margin: 5px;
+      padding: 5px; font-family: monospace;
     }
   </style>
 </head>
@@ -39,20 +48,30 @@
   </div>
 
   <div id="controls">
-    <div>Filter:
+    <div class="btn-row">
+      <button id="prevBtn">PREV</button>
+      <button id="playBtn">PAUSE</button>
+      <button id="nextBtn">NEXT</button>
+      <span id="index-display">0 / 0</span>
+    </div>
+    <div class="btn-row">Filter:
       <select id="modeSelect">
         <option value="all">All Expressions</option>
         <option value="arkit">ARKit Only</option>
         <option value="vrm0">VRM 0.x Basic</option>
       </select>
     </div>
-    <div>Speed:
+    <div class="btn-row">Speed:
       <select id="speedSelect">
         <option value="2.0">Slow</option>
         <option value="1.5" selected>Normal</option>
         <option value="1.0">Fast</option>
         <option value="0.5">Very Fast</option>
       </select>
+    </div>
+    <div class="btn-row">Exaggeration:
+      <input type="range" id="exaggerateSlider" min="1.0" max="3.0" step="0.1" value="1.0" style="vertical-align: middle;">
+      <span id="exaggerateVal">1.0</span>x
     </div>
   </div>
 
@@ -65,6 +84,8 @@
 
     const ARKIT_NAMES = [
       'eyeBlinkLeft','eyeBlinkRight','eyeWideLeft','eyeWideRight','eyeSquintLeft','eyeSquintRight',
+      'eyeLookDownLeft','eyeLookDownRight','eyeLookInLeft','eyeLookInRight',
+      'eyeLookOutLeft','eyeLookOutRight','eyeLookUpLeft','eyeLookUpRight',
       'jawOpen','jawForward','jawLeft','jawRight',
       'mouthClose','mouthFunnel','mouthPucker','mouthLeft','mouthRight',
       'mouthSmileLeft','mouthSmileRight','mouthFrownLeft','mouthFrownRight',
@@ -85,6 +106,39 @@
     const shapeCountEl   = document.getElementById('shape-count');
     const modeSelect     = document.getElementById('modeSelect');
     const speedSelect    = document.getElementById('speedSelect');
+    const exaggerateSlider = document.getElementById('exaggerateSlider');
+    const exaggerateVal    = document.getElementById('exaggerateVal');
+    const prevBtn          = document.getElementById('prevBtn');
+    const nextBtn          = document.getElementById('nextBtn');
+    const playBtn          = document.getElementById('playBtn');
+    const indexDisplay     = document.getElementById('index-display');
+
+    let isPlaying = true;
+
+    exaggerateSlider.addEventListener('input', () => {
+      exaggerateVal.textContent = exaggerateSlider.value;
+    });
+
+    playBtn.addEventListener('click', () => {
+      isPlaying = !isPlaying;
+      playBtn.textContent = isPlaying ? 'PAUSE' : 'PLAY';
+    });
+
+    prevBtn.addEventListener('click', () => {
+      const list = getFilteredExpressions();
+      if (!list.length) return;
+      setExprValue(list[currentIndex], 0);
+      currentIndex = (currentIndex - 1 + list.length) % list.length;
+      elapsed = 0;
+    });
+
+    nextBtn.addEventListener('click', () => {
+      const list = getFilteredExpressions();
+      if (!list.length) return;
+      setExprValue(list[currentIndex], 0);
+      currentIndex = (currentIndex + 1) % list.length;
+      elapsed = 0;
+    });
 
     // ---------------------------------------------------------------------------
     // Load VRM loader
@@ -200,6 +254,9 @@
     }
 
     console.log('[Test] Available expressions:', allExpressions);
+    allExpressions.forEach((name, i) => {
+        if (name.toLowerCase().includes('funnel')) console.log(`[Test] Funnel found at index ${i}: ${name}`);
+    });
     shapeCountEl.textContent = `Total expressions in VRM: ${allExpressions.length}`;
     statusEl.textContent = 'Ready. Cycling expressions…';
 
@@ -234,40 +291,31 @@
     }
 
     // ---------------------------------------------------------------------------
-    // Teeth mesh — jaw-related ARKit shapes need a companion shape on h_TeethDown.
-    // The VRM expression binds only cover the face mesh; teeth are a separate mesh
-    // with different morph target names (no h_teeth. prefix in VRM 1.0 export).
-    // ---------------------------------------------------------------------------
-    const TEETH_SHAPE_MAP = {
-        // Jaw openers
-        'jawOpen':     't_MouthOpen_h',
-        'mouthFunnel': 't_Shout_h',
-        'mouthClose':  't_MPB_h',
-        'jawLeft':     't_Ljaw_h',
-        'jawRight':    't_Rjaw_h',
-        'jawForward':  't_JawFront_h',
-        // VRM0 visemes
-        'aa':          't_AE_AA_h',
-        'ih':          't_TD_I_h',
-        'ou':          't_UH_OO_h',
-        'oh':          't_AO_a_h',
-        'ee':          't_Ax_E_h',
-    };
-    const teethMesh = scene.meshes.find(m => m.name === 'h_TeethDown');
-
-    // Pre-cache teeth morph targets by name for O(1) lookup
-    const teethTargetByName = new Map();
-    if (teethMesh?.morphTargetManager) {
-        for (let i = 0; i < teethMesh.morphTargetManager.numTargets; i++) {
-            const t = teethMesh.morphTargetManager.getTarget(i);
-            teethTargetByName.set(t.name, t);
-        }
-    }
-
-    // ---------------------------------------------------------------------------
     // SetValue utility — index-based via morphBindMap, name-scan fallback,
-    // plus teeth mesh companion shape
+    // plus teeth mesh companion shape and eye bone driving
     // ---------------------------------------------------------------------------
+    const getBone = (name) => {
+        if (vrmManager.humanoid?.getBoneNode) return vrmManager.humanoid.getBoneNode(name);
+        // Fallback to manual lookup in humanBones map
+        const boneData = vrmManager.humanoid?.humanBones?.[name];
+        if (boneData && boneData.node !== undefined) {
+            return vrmManager.transformNodeCache?.[boneData.node];
+        }
+        return null;
+    };
+
+    const leftEye  = getBone('leftEye');
+    const rightEye = getBone('rightEye');
+    
+    if (leftEye)  leftEye.rotationQuaternion  = leftEye.rotationQuaternion  || BABYLON.Quaternion.Identity();
+    if (rightEye) rightEye.rotationQuaternion = rightEye.rotationQuaternion || BABYLON.Quaternion.Identity();
+
+    const initialLeftEyeRot  = leftEye?.rotationQuaternion?.clone()  ?? BABYLON.Quaternion.Identity();
+    const initialRightEyeRot = rightEye?.rotationQuaternion?.clone() ?? BABYLON.Quaternion.Identity();
+    const MAX_EYE_ROT = 0.35;
+
+    console.log('[Test] Eye bones found:', { leftEye: !!leftEye, rightEye: !!rightEye });
+
     const setExprValue = (name, value) => {
         if (expressionManager?.setValue) {
             expressionManager.setValue(name, value);
@@ -287,11 +335,23 @@
             }
         }
 
-        // Drive teeth companion shape (face VRM binds don't cover the teeth mesh)
-        const teethTargetName = TEETH_SHAPE_MAP[name];
-        if (teethTargetName) {
-            const t = teethTargetByName.get(teethTargetName);
-            if (t) t.influence = value;
+        // Drive eye bones if bones exist (VRM standard for eye movement)
+        if (name.startsWith('eyeLook') && (leftEye || rightEye)) {
+            let yaw = 0, pitch = 0;
+            const amt = value * MAX_EYE_ROT;
+            if (name.includes('Down')) pitch = amt;
+            if (name.includes('Up'))   pitch = -amt;
+            if (name.includes('In'))   yaw = (name.includes('Left') ? amt : -amt);
+            if (name.includes('Out'))  yaw = (name.includes('Left') ? -amt : amt);
+
+            if (leftEye && name.includes('Left')) {
+                const rot = BABYLON.Quaternion.RotationYawPitchRoll(yaw, pitch, 0);
+                leftEye.rotationQuaternion = rot.multiply(initialLeftEyeRot);
+            }
+            if (rightEye && name.includes('Right')) {
+                const rot = BABYLON.Quaternion.RotationYawPitchRoll(yaw, pitch, 0);
+                rightEye.rotationQuaternion = rot.multiply(initialRightEyeRot);
+            }
         }
     };
 
@@ -308,9 +368,16 @@
     // ---------------------------------------------------------------------------
     // Tick — sine-wave cycling
     // ---------------------------------------------------------------------------
-    let currentIndex = 0;
+    const params = new URLSearchParams(window.location.search);
+    const startIdx = parseInt(params.get('index')) || 0;
+    const autoPlay = params.get('play') !== 'false';
+    const jawBone  = getBone('jaw');
+
+    let currentIndex = startIdx;
     let elapsed = 0;
     let lastMs = performance.now();
+    isPlaying = autoPlay;
+    playBtn.textContent = isPlaying ? 'PAUSE' : 'PLAY';
 
     scene.onBeforeRenderObservable.add(() => {
       const now = performance.now();
@@ -319,19 +386,37 @@
 
       const duration = parseFloat(speedSelect.value);
       const list = getFilteredExpressions();
-      if (list.length === 0) return;
-
-      elapsed += dt;
-
-      if (elapsed > duration) {
-        elapsed = 0;
-        setExprValue(list[currentIndex], 0);
-        currentIndex = (currentIndex + 1) % list.length;
+      if (list.length === 0) {
+        indexDisplay.textContent = '0 / 0';
+        return;
       }
 
-      const value = Math.max(0, Math.sin(Math.PI * (elapsed / duration)));
-      const name  = list[currentIndex];
+      // Ensure index is within bounds if filter changed
+      if (currentIndex >= list.length) currentIndex = 0;
+      indexDisplay.textContent = `${currentIndex + 1} / ${list.length}`;
+
+      const name = list[currentIndex];
       
+      // Log Jaw State (Morph influence)
+      const jawTarget = morphBindMap.get('jawOpen')?.[0]?.target;
+      const jawInf = jawTarget ? jawTarget.influence : 0;
+      console.log(`[Test] [${currentIndex}] ${name} | JawOpen Inf: ${jawInf.toFixed(4)}`);
+
+      let value = 0;
+      if (isPlaying) {
+        elapsed += dt;
+        if (elapsed > duration) {
+          elapsed = 0;
+          setExprValue(list[currentIndex], 0);
+          currentIndex = (currentIndex + 1) % list.length;
+        }
+        value = Math.max(0, Math.sin(Math.PI * (elapsed / duration))) * parseFloat(exaggerateSlider.value);
+      } else {
+        // Presentation mode: hold at full strength
+        value = 1.0 * parseFloat(exaggerateSlider.value);
+        elapsed = 0; // reset animation progress
+      }
+
       setExprValue(name, value);
 
       const type = ARKIT_NAMES.includes(name) ? 'ARKIT' : (VRM0_NAMES.includes(name) ? 'VRM0' : 'CUSTOM');

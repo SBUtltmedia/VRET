@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>VRMA Animation Candidates — Traffic Stop</title>
+<style>
+  body { font:14px/1.5 system-ui,sans-serif; max-width:960px; margin:0 auto; padding:20px; background:#0d0d14; color:#d0d0dd; }
+  h1 { color:#7bf; font-size:22px; margin-bottom:4px; }
+  h2 { font-size:17px; margin:28px 0 10px; padding-bottom:4px; border-bottom:1px solid #2a2a3a; }
+  h2.officer { color:#f88; }
+  h2.jordan { color:#8cf; }
+  .note { color:#888; font-size:13px; margin-bottom:20px; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; padding:6px 8px; font-size:12px; text-transform:uppercase; color:#777; border-bottom:1px solid #2a2a3a; }
+  td { padding:6px 8px; border-bottom:1px solid #1a1a28; vertical-align:top; }
+  td.cur { color:#777; font-size:12px; }
+  .url { font:12px/1.3 monospace; color:#5af; }
+  .url a { color:#5af; text-decoration:none; }
+  .url a:hover { text-decoration:underline; }
+  .badge { display:inline-block; font-size:10px; padding:1px 6px; border-radius:3px; margin-right:4px; }
+  .badge.rep { background:#1a4a2a; color:#4c4; }
+  .badge.cur { background:#3a1a1a; color:#c44; }
+  .badge.strik { background:#3a3a2a; color:#aa4; }
+  .desc { font-size:13px; color:#aaa; }
+  .model-toggle { font-size:12px; color:#666; margin:4px 0 12px; }
+  .model-toggle a { color:#7bf; }
+</style>
+</head>
+<body>
+
+<h1>VRMA Animation Candidates — Traffic Stop</h1>
+<p class="note">
+  Proposed replacements for the generic walk/run clips currently in the timeline.
+  Click a link to preview the VRMA on the default model (Jordan).
+  Add <code>&amp;model=...path...</code> to preview on the officer's model.
+</p>
+<p class="model-toggle">
+  Model paths: Jordan = <code>models/AIAN/AIAN_F_1_Casual.vrm</code> |
+  Officer = <code>models/White/White_M_1_Util.vrm</code> |
+  <a href="http://127.0.0.1:5503/plays/model.html">Default viewer</a>
+</p>
+
+<!-- ─── OFFICER ─── -->
+<h2 class="officer">Officer — authoritative / aggressive</h2>
+<table>
+  <tr><th style="width:20px"></th><th>Clip</th><th style="width:70px">Replace</th><th>Description</th><th style="width:380px">Preview</th></tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>13_27.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 02_01.walk</td>
+    <td class="desc"><strong>direct traffic, wave, point</strong> — Officer pointing and giving hand commands. Direct replacement for "Window down all the way."</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/13_27.vrma">model.html?vrma=vrma/13_27.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>14_24.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 08_05.walk/stride</td>
+    <td class="desc"><strong>direct traffic, wave, point</strong> — Similar pointing/commanding gestures. Good for "I said both hands, son."</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/14_24.vrma">model.html?vrma=vrma/14_24.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>18_10.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 08_07.exaggerated stride</td>
+    <td class="desc"><strong>quarrel — angry hand gestures</strong> — Aggressive arm/hand movements. Perfect for "DON'T REACH! Every time you move..."</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/18_10.vrma">model.html?vrma=vrma/18_10.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>22_18.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 07_12.brisk walk</td>
+    <td class="desc"><strong>stares down B, leans with hands on high stool</strong> — Intimidation posture, leaning in. Great for "STAY STILL! DON'T MOVE!"</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/22_18.vrma">model.html?vrma=vrma/22_18.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>22_21.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 104_44.AttitudeWalk</td>
+    <td class="desc"><strong>B pounds high stool, points at A</strong> — Aggressive pointing, pounding gesture. Perfect for peak escalation — "Hands on the ceiling!"</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/22_21.vrma">model.html?vrma=vrma/22_21.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>111_37.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 07_01.walk</td>
+    <td class="desc"><strong>Wave</strong> — Hand gesture for "Slowly... use your left hand."</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/111_37.vrma">model.html?vrma=vrma/111_37.vrma</a></td>
+  </tr>
+
+</table>
+
+<!-- ─── JORDAN ─── -->
+<h2 class="jordan">Jordan — nervous / defensive</h2>
+<table>
+  <tr><th style="width:20px"></th><th>Clip</th><th style="width:70px">Replace</th><th>Description</th><th style="width:380px">Preview</th></tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>18_08.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 05_01.walk</td>
+    <td class="desc"><strong>conversation — explain with hand gestures</strong> — Pleading/explaining gestures. Perfect for "What? I'm already late." and "I was just getting my wallet."</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/18_08.vrma">model.html?vrma=vrma/18_08.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>13_04.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 09_01.run</td>
+    <td class="desc"><strong>sit on stepstool, chin in hand</strong> — Sitting posture, pensive/nervous. Jordan is in the driver's seat — this captures the seated position naturally.</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/13_04.vrma">model.html?vrma=vrma/13_04.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>13_05.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 02_03.run/jog</td>
+    <td class="desc"><strong>sit on stepstool, hands against chin, fidget, stand up</strong> — Anxious fidgeting in seat, then standing. Good for "A weapon? Are you serious?"</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/13_05.vrma">model.html?vrma=vrma/13_05.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>105_13.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 104_02.neutral walk</td>
+    <td class="desc"><strong>SadWalk</strong> — Defeated, slumped posture. Good for "I'll just show you my ID so we can be done."</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/105_13.vrma">model.html?vrma=vrma/105_13.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>105_32.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 02_04.jump, balance</td>
+    <td class="desc"><strong>ScaredWalk</strong> — Fearful, tentative movement. Perfect for "I was just getting my wallet. My hands are up. Look."</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/105_32.vrma">model.html?vrma=vrma/105_32.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>142_05.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> 104_31.(no desc)</td>
+    <td class="desc"><strong>Depressed</strong> — Resigned, defeated body language. Good for "Okay. Okay. I'm opening it. Don't... please don't do anything."</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/142_05.vrma">model.html?vrma=vrma/142_05.vrma</a></td>
+  </tr>
+
+  <tr>
+    <td><span class="badge rep">NEW</span></td>
+    <td><strong>111_25.vrma</strong></td>
+    <td class="cur"><span class="badge cur">OLD</span> <em>(supplemental)</em></td>
+    <td class="desc"><strong>Shrug</strong> — Expressive "I don't know / what can I do?" shoulder gesture. Good supplementary clip.</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/111_25.vrma">model.html?vrma=vrma/111_25.vrma</a></td>
+  </tr>
+
+</table>
+
+<h2 style="color:#aa4;">Bonus — directly named</h2>
+<table>
+  <tr><th>Clip</th><th>Description</th><th>Preview</th></tr>
+  <tr>
+    <td><strong>105_35.vrma</strong></td>
+    <td class="desc"><strong>TrafficWalk</strong> — Directly named for the scene. Worth testing as a replacement for any officer walk clip.</td>
+    <td class="url"><a href="http://127.0.0.1:5503/plays/model.html?vrma=vrma/105_35.vrma">model.html?vrma=vrma/105_35.vrma</a></td>
+  </tr>
+</table>
+
+<p class="note" style="margin-top:24px;">
+  <strong>Note:</strong> All clips are full-body CMU mocap. Leg movement may look like walking-in-place since position keyframes are zeroed.
+  The stepstool clips (13_04, 13_05) are the best fit for Jordan since they imply sitting — matching the driver's-seat context.
+  The quarrel clips (18_10, 22_18, 22_21) have upper-body-dominant angry/authoritative gestures ideal for the officer's escalation.
+</p>
+
+</body>
+</html>

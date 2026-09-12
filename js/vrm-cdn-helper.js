@@ -25,7 +25,9 @@
     // Check if it's in a category that moved to the external CDN
     const parts = cleanPath.split('/');
     if (parts[0] === 'models' && parts.length > 2 && CATEGORIES.includes(parts[1])) {
-      return MODEL_CDN + cleanPath;
+      // Resolve to CDN only if running against the external model set;
+      // local repos keep models in ./models/ and should not be redirected.
+      return path;
     }
     
     return path;
@@ -37,14 +39,15 @@
     if (SL) {
       const originalImportMeshAsync = SL.ImportMeshAsync;
       SL.ImportMeshAsync = function(meshesNames, rootUrl, sceneFilename, scene, onProgress, pluginExtension) {
-        // If sceneFilename is null/undefined, rootUrl is the full path
-        if (!sceneFilename) {
+        // If sceneFilename is not a string, it might be the Scene object (Babylon shortcut)
+        const isSceneFileAString = typeof sceneFilename === 'string';
+        
+        if (!sceneFilename || !isSceneFileAString) {
           rootUrl = window.resolveModelUrl(rootUrl);
         } else {
-          // If both are provided, we check the combination
+          // If both are provided and sceneFilename is a string, check the combination
           const combined = rootUrl + (rootUrl.endsWith('/') ? '' : '/') + sceneFilename;
           if (window.resolveModelUrl(combined).startsWith(MODEL_CDN)) {
-             // If it should be CDN, we need to split it back or just use the full URL as sceneFilename
              const resolved = window.resolveModelUrl(combined);
              rootUrl = '';
              sceneFilename = resolved;

@@ -92,6 +92,8 @@
   <button id="head-toggle"><span class="led"></span>HEAD TILT<span class="hint">H</span></button>
 
   <script type="module">
+    import { LifelikeController } from '../js/lifelike-controller.js';
+
     BABYLON.TransformNode.prototype.getTotalVertices ??= () => 0;
 
     const speakerEl    = document.getElementById('speaker');
@@ -130,6 +132,10 @@
     const key = new BABYLON.DirectionalLight('key', new BABYLON.Vector3(.2, -1, .4), scene);
     key.intensity = 0.8;
     key.diffuse   = new BABYLON.Color3(1, .95, .88);
+
+    const rim = new BABYLON.DirectionalLight('rim', new BABYLON.Vector3(0.5, -0.2, 0.8), scene);
+    rim.intensity = 0.5;
+    rim.diffuse   = new BABYLON.Color3(.4, .6, 1);
 
     const spot = new BABYLON.PointLight('spot', new BABYLON.Vector3(0, 1.7, 0.4), scene);
     spot.diffuse    = new BABYLON.Color3(1, .95, .9);
@@ -249,7 +255,9 @@
         }
       }
 
-      actors[id] = { id, mgr, root, morphMap, faceAnim: null, worldX };
+      const actor = { id, mgr, root, morphMap, faceAnim: null, worldX };
+      actor.lifelike = new LifelikeController(actor, scene);
+      actors[id] = actor;
     }
 
     const [a0, a1] = sceneData.actors;
@@ -259,45 +267,13 @@
     camera.position = new BABYLON.Vector3(0, 1.58, 0.58);
     camera.setTarget(new BABYLON.Vector3(0, 1.56, 0));
 
-    // ── 3. Head Procedural Tracking ───────────────────────────────────────────
-    let headTiltEnabled = true;
-    const headStates = {};
-
-    for (const actor of Object.values(actors)) {
-      const head = actor.mgr?.humanoidBone?.head;
-      const neck = actor.mgr?.humanoidBone?.neck;
-      if (!head) continue;
-      headStates[actor.id] = {
-        energy: 0, tiltZ: 0, tiltX: 0,
-        phase: Math.random() * Math.PI * 2, head, neck,
-        headBase: head.rotationQuaternion?.clone() ?? BABYLON.Quaternion.Identity(),
-        neckBase: neck?.rotationQuaternion?.clone() ?? BABYLON.Quaternion.Identity()
-      };
-    }
-
-    function tickHead(actor, now) {
-      const s = headStates[actor.id];
-      if (!s) return;
-      if (!headTiltEnabled) {
-        s.tiltZ *= 0.85; s.tiltX *= 0.85; s.energy *= 0.85;
-      } else {
-        let targetEnergy = 0;
-        const fa = actor.faceAnim;
-        if (fa?.startT) {
-          const t = now - fa.startT;
-          const jawCh = fa.channels.find(c => c.name.toLowerCase() === 'jawopen' || c.name.toLowerCase() === 'aa');
-          if (jawCh) targetEnergy += evalExprChannel(jawCh, t) * 0.6;
-        }
-        s.energy += (targetEnergy - s.energy) * 0.08;
-        s.tiltZ += (Math.sin(now * 0.4 + s.phase) * 0.04 - s.tiltZ) * 0.04;
-        s.tiltX += (s.energy * -0.1 - s.tiltX) * 0.06;
-      }
-      s.head.rotationQuaternion = s.headBase.multiply(BABYLON.Quaternion.FromEulerAngles(s.tiltX, 0, s.tiltZ));
-      if (s.neck) s.neck.rotationQuaternion = s.neckBase.multiply(BABYLON.Quaternion.FromEulerAngles(s.tiltX * 0.4, 0, s.tiltZ * 0.4));
-    }
+    // ── 3. Controls ──────────────────────────────────────────────────────────
+    let lifelikeEnabled = true;
 
     headToggleEl.addEventListener('click', () => {
-      headTiltEnabled = !headTiltEnabled; headToggleEl.className = headTiltEnabled ? '' : 'off';
+      lifelikeEnabled = !lifelikeEnabled; 
+      headToggleEl.className = lifelikeEnabled ? '' : 'off';
+      Object.values(actors).forEach(a => a.lifelike.enabled = lifelikeEnabled);
     });
 
     // ── 4. Execution Interface Layer ──────────────────────────────────────────
@@ -311,27 +287,31 @@
     }
 
     function setExpression(actor, name, value) {
-      const targetKey = name.toLowerCase();
-      const normalizedKey = targetKey.replace(/[^a-z0-9]/g, '');
-      const mt = actor.morphMap.get(targetKey) || actor.morphMap.get(normalizedKey);
-      if (mt) {
-        mt.influence = value;
+      const em = actor.mgr.expressionManager || actor.mgr.ext10?.expressionManager;
+      if (em) {
+        em.setValue(name, value);
       } else {
-        const mapped = ARKIT_MAP[name];
-        if (mapped) {
-          const mappedKey = mapped.toLowerCase();
-          const normalizedMappedKey = mappedKey.replace(/[^a-z0-9]/g, '');
-          const mt2 = actor.morphMap.get(mappedKey) || actor.morphMap.get(normalizedMappedKey);
-          if (mt2) mt2.influence = value;
-        }
+        // Fallback for non-VRM1 models or direct morph targets
+        const targetKey = name.toLowerCase();
+        const normalizedKey = targetKey.replace(/[^a-z0-9]/g, '');
+        const mt = actor.morphMap.get(targetKey) || actor.morphMap.get(normalizedKey);
+        if (mt) mt.influence = value;
       }
     }
 
     function resetFace(actor) {
-      if (!actor?.faceAnim) return;
-      for (const ch of actor.faceAnim.channels) setExpression(actor, ch.name, 0);
+      if (!actor) return;
+      const em = actor.mgr.expressionManager || actor.mgr.ext10?.expressionManager;
+      if (em) {
+        // Clear all VRM expressions
+        const list = (typeof em.getExpressionList === 'function') ? em.getExpressionList() : [];
+        list.forEach(name => em.setValue(name, 0));
+      }
+      // Clear manual morphs
+      actor.morphMap.forEach(mt => mt.influence = 0);
       actor.faceAnim = null;
     }
+
 
     async function playEvent(event) {
       const actor = actors[event.actor];
@@ -424,6 +404,7 @@
     // ── 5. Clean Evaluation Loop ──────────────────────────────────────────────
     engine.runRenderLoop(() => {
       const now = performance.now() / 1000;
+      const dt  = engine.getDeltaTime() / 1000;
       let hudHtml = "";
 
       // Smoothly slide the spotlight target position
@@ -431,22 +412,35 @@
 
       for (const actor of Object.values(actors)) {
         const fa = actor.faceAnim;
+        let isSpeaking = false;
+
         if (fa?.startT) {
           const t = now - fa.startT;
           if (t > fa.duration + 0.1) {
+            // Reset tracking shapes when done
             fa.channels.forEach(ch => setExpression(actor, ch.name, 0));
             actor.faceAnim = null;
           } else {
+            isSpeaking = true;
             fa.channels.forEach(ch => {
               const val = evalExprChannel(ch, t);
               setExpression(actor, ch.name, val);
-              if (val > 0.15) {
-                hudHtml += `<div class="track-row"><span>${actor.id}.${ch.name}</span><span class="track-val">${val.toFixed(2)}</span></div>`;
-              }
             });
           }
         }
-        tickHead(actor, now);
+        actor.lifelike.update(dt, isSpeaking);
+
+        // Populate HUD with ALL active expressions for this actor
+        const em = actor.mgr.expressionManager || actor.mgr.ext10?.expressionManager;
+        if (em) {
+            const list = (typeof em.getExpressionList === 'function') ? em.getExpressionList() : [];
+            list.forEach(name => {
+                const val = em.getValue(name);
+                if (val > 0.05) {
+                    hudHtml += `<div class="track-row"><span>${actor.id}.${name}</span><span class="track-val">${val.toFixed(2)}</span></div>`;
+                }
+            });
+        }
       } 
 
       dumpEl.innerHTML = hudHtml || "<div style='opacity:0.4'>No active blendshapes</div>";

@@ -25,7 +25,7 @@
   <div id="ui">
     <div class="row">
       <label>Ref:</label>
-      <input type="text" id="refPath" value="models/Seed-san.vrm" style="width: 180px;">
+      <input type="text" id="refPath" value="models/MetaHuman/MetaHuman.vrm" style="width: 180px;">
     </div>
     <div class="row">
       <label>Target:</label>
@@ -82,7 +82,7 @@
         s.src = 'https://xuhuisheng.github.io/babylonjs-vrm/babylon-vrm-loader.js';
         s.onload = () => {
             const s2 = document.createElement('script');
-            s2.src = 'vrm1-loader.js';
+            s2.src = 'plays/vrm1-loader.js';
             s2.onload = res;
             document.head.appendChild(s2);
         };
@@ -109,7 +109,7 @@
         const preMgrCount = scene.metadata?.vrmManagers?.length ?? 0;
         const preRootIds = new Set(scene.rootNodes.map(n => n.uniqueId));
         
-        await BABYLON.ImportMeshAsync("", "", path, scene);
+        await BABYLON.ImportMeshAsync(path, scene);
         
         const mgr = scene.metadata?.vrmManagers?.[preMgrCount];
         const root = scene.rootNodes.find(n => !preRootIds.has(n.uniqueId));
@@ -137,6 +137,8 @@
         
         if (refActor) refActor.root.dispose();
         if (targetActor) targetActor.root.dispose();
+        
+        scene.metadata = scene.metadata || {};
         scene.metadata.vrmManagers = [];
 
         const refPath = document.getElementById('refPath').value;

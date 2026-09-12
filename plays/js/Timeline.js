@@ -3,9 +3,10 @@
  * Support Accumulative Root Motion and Orientation across consecutive timeline steps with smooth animation blending.
  */
 export class TimelineManager {
-    constructor(stage, actors) {
+    constructor(stage, actors, opts = {}) {
         this.stage = stage;
         this.actors = actors;
+        this._fixRootPosition = opts.fixRootPosition !== false;
         
         this.progEl = document.getElementById("prog-bar");
         this.speakerEl = document.getElementById("speaker");
@@ -294,9 +295,10 @@ export class TimelineManager {
             return this._vrmaCache[cacheKey].clone(`${actor.id}-${name}-${Date.now()}`);
         }
         const scene = this.stage.scene;
-        const managersBefore = (scene.metadata?.vrmAnimationManagers ?? []).length;
+        const beforeSet = new Set(scene.metadata?.vrmAnimationManagers ?? []);
         const container = await BABYLON.LoadAssetContainerAsync(this.resolveAsset(url), scene);
-        const vrmAnimMgr = (scene.metadata?.vrmAnimationManagers ?? [])[managersBefore];
+        const mgrs = scene.metadata?.vrmAnimationManagers ?? [];
+        const vrmAnimMgr = mgrs.find(m => !beforeSet.has(m));
         const group = container.animationGroups[0];
         if (!vrmAnimMgr?.animationMap || !group) {
             container.dispose();
@@ -340,7 +342,7 @@ export class TimelineManager {
         document.body.setAttribute("data-current", step.name);
         document.body.setAttribute("data-status", "playing");
 
-        const animGroup = await this._loadVRMACached(actor, step.clip, step.name, { fixRootPosition: true });
+        const animGroup = await this._loadVRMACached(actor, step.clip, step.name, { fixRootPosition: this._fixRootPosition });
         if (!animGroup) {
             console.error("[Timeline] Failed to load VRMA.");
             return;

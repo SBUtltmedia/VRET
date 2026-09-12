@@ -64,7 +64,7 @@ export class InertializationBlend {
         prev.q = q;
         prev.omega = prev.omega || { x: 0, y: 0, z: 0, scalarSpeed: 0 };
       } else {
-        this._inertia[bone.name] = { q, omega: null };
+        this._inertia[bone.name] = { bone, q, omega: null };
       }
     }
   }
@@ -82,6 +82,11 @@ export class InertializationBlend {
     this._targetAnim = targetAnim;
     this._entryFrame = entryFrame;
     this._prevTime = performance.now();
+
+    if (this._removeObs) {
+      this.scene.onAfterAnimationsObservable.remove(this._removeObs);
+      this._removeObs = null;
+    }
 
     // Evaluate target poses at entry frame
     this._targetPose = {};
@@ -125,7 +130,7 @@ export class InertializationBlend {
     for (const [boneName, data] of Object.entries(this._inertia)) {
       const targetQ = this._targetPose[boneName];
       if (!targetQ) continue;
-      const bone = this.scene.getTransformNodeByName(boneName);
+      const bone = data.bone;
       if (!bone) continue;
 
       const omega = data.omega;

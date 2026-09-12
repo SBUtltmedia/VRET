@@ -27,17 +27,19 @@
   <canvas id="renderCanvas"></canvas>
   <div id="ui">
     <div id="speaker"></div>
-    <div id="line">Loading…</div>
+    <div id="line">Loading&hellip;</div>
     <div id="prog-bg"><div id="prog-bar"></div></div>
   </div>
-  <div id="loading">Loading scene…</div>
+  <div id="loading">Loading scene&hellip;</div>
   <div id="diagnostics" style="position:absolute; top:10px; left:10px; padding:10px; background:rgba(0,0,0,0.6); color:#0f0; font:10px monospace; pointer-events:none; border-radius:4px; display:none;">
     <div style="font-weight:bold; margin-bottom:4px;">BONE MONITOR</div>
     <div id="bone-list"></div>
   </div>
+  <div id="anim-hud" style="position:absolute; bottom:10px; left:10px; padding:8px 12px; background:rgba(0,0,0,0.7); color:#fff; font:12px monospace; pointer-events:none; border-radius:4px; display:none;">
+  </div>
 
   <script type="module">
-    import { TransitionGenerator } from "./js/TransitionGenerator.js";
+    import { InertializationBlend } from './js/InertializationBlend.js';
 
     window.onerror = (msg, url, line, col, error) => {
       document.body.setAttribute('data-status', 'error');
@@ -54,25 +56,21 @@
     const loadEl    = document.getElementById('loading');
 
     const resolveAsset = p => (p && !p.startsWith('http')) ? '../' + p : p;
-    const resolveClipDef = def => {
-      if (!def) return null;
-      if (typeof def === 'string') return { url: resolveAsset(def) };
-      return { url: resolveAsset(def.url), from: def.from, to: def.to };
-    };
-    const resolveVRM = p => {
-      if (p.startsWith('http')) return p;
-      if (p.startsWith('models/')) return '../' + p;
-      return p;
-    };
 
     const isTest = new URLSearchParams(location.search).has('test');
-    const TEST_BONE_MOVEMENT_THRESHOLD = 0.02; // degrees — min bone rotation delta to consider animations playing
+    const SHOW_HUD = new URLSearchParams(location.search).has('hud');
+    if (SHOW_HUD) {
+      const hudEl = document.getElementById('anim-hud');
+      if (hudEl) hudEl.style.display = 'block';
+    }
 
     const ARKIT_MAP = {
       'jawOpen': 'aa', 'mouthFunnel': 'oh', 'mouthPucker': 'ou',
       'eyeBlinkLeft': 'blinkLeft', 'eyeBlinkRight': 'blinkRight',
       'mouthSmileLeft': 'happy', 'mouthSmileRight': 'happy'
     };
+
+    const FINGER_BONE_RE = /thumb|index|middle|ring|little|metacarpal|finger/i;
 
     function evalExprChannel(ch, t) {
       const { times, weights } = ch;
@@ -151,12 +149,14 @@
     const actors = {};
 
     async function loadActor(actorDef) {
-      const { id, vrm, startPosition, idleClip } = actorDef;
-      loadEl.textContent = `Loading ${id}…`;
+      const { id, vrm, startPosition } = actorDef;
+      loadEl.textContent = `Loading ${id}&hellip;`;
       const preMgrCount = scene.metadata?.vrmManagers?.length ?? 0;
       const preRootIds  = new Set(scene.rootNodes.map(n => n.uniqueId));
 
-      await BABYLON.ImportMeshAsync(resolveVRM(vrm), scene);
+      const vrmUrl = vrm.startsWith('http') ? vrm :
+        vrm.startsWith('models/') ? '../' + vrm : vrm;
+      await BABYLON.ImportMeshAsync(vrmUrl, scene);
 
       const mgr = (scene.metadata?.vrmManagers ?? [])
         .slice(preMgrCount).find(m => m.isVRM1)
@@ -164,11 +164,12 @@
       const root = scene.rootNodes.find(n => !preRootIds.has(n.uniqueId));
       if (!mgr || !root) { console.error('[scene] Load failed for', id); return; }
 
-      root.position.set(startPosition?.x ?? 0, startPosition?.y ?? 0, startPosition?.z ?? 0);
+      // Create box parent for root motion
+      const box = new BABYLON.TransformNode(`box-${id}`, scene);
+      root.setParent(box);
+      box.position.set(startPosition?.x ?? 0, startPosition?.y ?? 0, startPosition?.z ?? 0);
 
-      const vrmAvatar = new BABYLON.AnimatorAvatar(`avatar-${id}`, root);
-
-      // Build morph target map (ARKit blendshapes)
+      // Build morph target map
       const morphMap = new Map();
       const normalize = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
       for (const mesh of root.getChildMeshes(false)) {
@@ -185,69 +186,67 @@
         }
       }
 
-      actors[id] = { id, mgr, root, vrmAvatar, morphMap, faceAnim: null, idleGroup: null, gestureGroup: null };
+      // AnimatorAvatar for retargetAnimationGroup
+      const vrmAvatar = new BABYLON.AnimatorAvatar(`avatar-${id}`, root);
+      const blender = new InertializationBlend(scene);
 
-        if (idleClip) {
-          const clip = resolveClipDef(idleClip);
-          if (!clip) return;
-          const g = await loadAndRetargetVRMA(actors[id], clip.url, 'idle', { fixRootPosition: false });
-          if (g) {
-            actors[id].idleGroup = g;
-            g._idleFrom = clip.from != null ? clip.from : g.from;
-            g._idleTo = clip.to != null ? clip.to : g.to;
-            // Defer start to first render frame (avoids 0 animatables when engine not running)
-            scene.onBeforeRenderObservable.addOnce(() => {
-              g.start(true, 1.0, g._idleFrom, g._idleTo, false);
-            });
-          }
-      }
+      const idleClipName = actorDef.idleClip ? actorDef.idleClip.replace(/^.*[/\\]|\.vrma$/g, '') : null;
+      actors[id] = { id, mgr, root, box, morphMap, vrmAvatar, blender, faceAnim: null, _bodyGroup: null, _prevClip: null, _idleGroup: null, _idleClipName: idleClipName };
     }
 
-    // Expose for puppeteer diagnostics
     window.__scene = scene;
     window.__actors = actors;
 
-    // ── VRMA body animation ────────────────────────────────────────────────────
-    function cloneRetargetedGroup(group, newName) {
-      const cloned = new BABYLON.AnimationGroup(newName, scene);
-      for (const ta of group.targetedAnimations) {
-        if (ta.target) {
-          const anim = ta.animation;
-          anim.fillMode = BABYLON.Animation.FILLMODE_HOLD;
-          cloned.addTargetedAnimation(anim, ta.target);
-        }
-      }
-      group.stop();
-      return cloned;
-    }
+    // ── VRMA loader (retargetAnimationGroup with pre-load state preservation) ──
+    async function loadVRMA(actor, url, name) {
+      actor._loading = true;
 
-    async function loadAndRetargetVRMA(actor, url, name, opts = {}) {
-      const { fixRootPosition = false } = opts;
+      // Save current bone state before the load (babylon-vrm-loader corrupts bones)
+      const pre = {};
+      for (const [key, node] of Object.entries(actor.mgr.humanoidBone)) {
+        if (key === 'nodeMap') continue;
+        if (!node) continue;
+        pre[key] = {
+          rotationQuaternion: node.rotationQuaternion ? node.rotationQuaternion.clone() : null,
+          position: node.position.clone(),
+        };
+      }
+
       let container;
       try { container = await BABYLON.LoadAssetContainerAsync(url, scene); }
-      catch (e) { console.warn('[scene] VRMA load failed:', url, e); return null; }
+      catch (e) { return null; }
 
       const srcGroup = container.animationGroups[0];
-      const vrmAnimMgr = (scene.metadata?._vrmAnimations ?? []).at(-1);
+      const animMgr = (scene.metadata?._vrmAnimations ?? []).at(-1);
 
-      if (!vrmAnimMgr?.animationMap || !srcGroup) {
+      if (!animMgr?.animationMap || !srcGroup) {
         container.dispose();
         return null;
       }
 
+      // Build mapNodeNames from temp nodes → VRM bone names
       const mapNodeNames = new Map();
       srcGroup.targetedAnimations.forEach((ta, i) => {
-        const boneName = vrmAnimMgr.animationMap.get(i);
+        const boneName = animMgr.animationMap.get(i);
         const bone = actor.mgr.humanoidBone[boneName];
-        if (bone && ta.target?.name) {
-          mapNodeNames.set(ta.target.name, bone.name);
-        }
+        if (bone && ta.target?.name) mapNodeNames.set(ta.target.name, bone.name);
       });
+
+      // Restore pre-load bone state (undo the loader's frame-0 evaluation)
+      for (const [key, node] of Object.entries(actor.mgr.humanoidBone)) {
+        if (key === 'nodeMap') continue;
+        const saved = pre[key];
+        if (!saved || !node) continue;
+        if (saved.rotationQuaternion && node.rotationQuaternion) node.rotationQuaternion.copyFrom(saved.rotationQuaternion);
+        node.position.copyFrom(saved.position);
+      }
+
+      actor._loading = false;
 
       const remapped = actor.vrmAvatar.retargetAnimationGroup(srcGroup, {
         animationGroupName: `${actor.id}-${name}`,
         fixAnimations: false,
-        fixRootPosition,
+        fixRootPosition: true,
         rootNodeName: actor.mgr.humanoidBone['hips']?.name,
         groundReferenceNodeName: actor.mgr.humanoidBone['leftFoot']?.name,
         mapNodeNames,
@@ -257,17 +256,7 @@
       return remapped;
     }
 
-    function stopGesture(actor) {
-      if (actor.gestureGroup) {
-        // Move to a temporary property to fade out
-        const oldGesture = actor.gestureGroup;
-        actor.fadingGestures ??= [];
-        actor.fadingGestures.push(oldGesture);
-        actor.gestureGroup = null;
-      }
-    }
-
-    // ── Face animation (morph targets from audio2expression JSON) ─────────────
+    // ── Face animation ─────────────────────────────────────────────────────────
     function setExpression(actor, name, value) {
       const targetKey = name.toLowerCase();
       const normalizedKey = targetKey.replace(/[^a-z0-9]/g, '');
@@ -282,53 +271,19 @@
       if (mt) mt.influence = value;
     }
 
-    function resetFace(actor) {
-      if (!actor?.faceAnim) return;
-      for (const ch of actor.faceAnim.channels) setExpression(actor, ch.name, 0);
-      actor.faceAnim = null;
-    }
-
     const boneListEl = document.getElementById('bone-list');
     const diagEl = document.getElementById('diagnostics');
     const TRACKED_BONES_DEFAULT = ['spine', 'chest', 'upperChest', 'neck', 'leftUpperArm', 'rightUpperArm'];
     let TRACKED_BONES = [...TRACKED_BONES_DEFAULT];
 
-    const urlParams = new URLSearchParams(location.search);
-    const GESTURE_FADE = parseFloat(urlParams.get('fade')) || 0.5;
-    const SNAP_DETECTION_THRESHOLD = parseFloat(urlParams.get('snap')) || 10.0;
-    const TRANSITION_MODE = urlParams.get('transition') || 'vrma';
-    const USE_VRMA_TRANSITION = TRANSITION_MODE === 'vrma';
-    const USE_WEIGHT_TRANSITION = TRANSITION_MODE === 'weight';
-    const USE_INERTIAL = TRANSITION_MODE === 'inertial';
-    const USE_MATCH_CROSSFADE = TRANSITION_MODE === 'match';
-    const TX_FRAMES = parseInt(urlParams.get('txframes')) || 0;
-    const MIN_TX_FRAMES = 12; 
-    const SMOOTH_THRESHOLD_DEG = parseFloat(urlParams.get('smooth')) || 6; 
-    const TARGET_DEG_PER_FRAME = Math.max(0.5, SMOOTH_THRESHOLD_DEG / 4); 
-    const MAX_TX_FRAMES = TX_FRAMES > 0 ? TX_FRAMES : (parseInt(urlParams.get('maxtx')) || 120); 
-    const smoothstep = (t) => t * t * (3 - 2 * t);
-    const FINGER_BONE_RE = /thumb|index|middle|ring|little|metacarpal|finger/i;
-    function getLimbNodeNames() {
-      const names = new Set();
-      for (const actor of Object.values(actors)) {
-        if (!actor.mgr?.humanoidBone) continue;
-        for (const [key, bone] of Object.entries(actor.mgr.humanoidBone)) {
-          if (key === 'nodeMap') continue;
-          if (!bone?.name || FINGER_BONE_RE.test(key)) continue;
-          names.add(bone.name);
-        }
-      }
-      return names;
-    }
-
-    // ── Render-loop evaluation (Face, Gestures, Diagnostics) ──────────────────
-    scene.onBeforeRenderObservable.add(() => {
+    // ── Render-loop evaluation (Face, Diagnostics) ─────────────────────────────
+    scene.onAfterRenderObservable.add(() => {
       const now = performance.now() / 1000;
       const dt = engine.getDeltaTime() / 1000;
       let diagHtml = '';
 
       for (const actor of Object.values(actors)) {
-        // 1. Face Animation
+        // Face animation (can stay here or move, but it's fine here)
         const fa = actor.faceAnim;
         if (fa?.startT) {
           const t = now - fa.startT;
@@ -340,137 +295,60 @@
           }
         }
 
-        // 2. Gesture Control: entry transitions + exit fade-out
-        if (actor.gestureGroup) {
-          const g = actor.gestureGroup;
-          if (g._startTime === undefined) g._startTime = now;
-          const elapsed = now - g._startTime;
+        // Track bone snap violations
+        if (actor._loading) continue;
+        actor.lastRotations ??= {};
 
-          // EXIT FADE-OUT (ALL MODES): gesture stop triggers weight ramp to 0
-          if (g._isStopping) {
-            if (g._stopTime === undefined) g._stopTime = now;
-            const stopElapsed = now - g._stopTime;
-            const targetW = smoothstep(Math.max(0, 1 - (stopElapsed / GESTURE_FADE)));
-            if (typeof g.weight === 'number') g.weight = targetW;
-            if (targetW <= 0) {
-              g.stop(); g.dispose(); actor.gestureGroup = null;
-            }
-          } else if (actor._usingVRMATransition) {
-            g.weight = 0;
-          } else if (actor._usingInertialTransition) {
-            g.weight = 0;
-            const ib = actor._inertialBlend;
-            if (!ib?.isActive) {
-              g.weight = 1;
-              actor._usingInertialTransition = false;
-              if (!g.isPlaying) {
-                g.start(false, 1.0, actor._inertialEntryFrame ?? 0, g.to, false);
-                g.goToFrame(actor._inertialEntryFrame ?? 0);
-              }
-            }
-          } else if (USE_MATCH_CROSSFADE) {
-            g.weight = smoothstep(Math.min(elapsed / GESTURE_FADE, 1));
-          } else if (USE_WEIGHT_TRANSITION) {
-            const targetW = elapsed < GESTURE_FADE
-              ? smoothstep(elapsed / GESTURE_FADE)
-              : 1;
-            if (actor.gestureGroup) g.weight = targetW;
-          }
-        }
+        // Capture inertia for whatever is currently driving the bones
+        if (actor._bodyGroup?.isPlaying) actor.blender.captureInertia(actor._bodyGroup);
+        else if (actor._idleGroup?.isPlaying && actor._idleGroup.weight > 0) actor.blender.captureInertia(actor._idleGroup);
 
-        // Fade out old gestures
-        if (actor.fadingGestures) {
-          for (let i = actor.fadingGestures.length - 1; i >= 0; i--) {
-            const g = actor.fadingGestures[i];
-            if (!g._fadeOutStart) g._fadeOutStart = now;
-            const elapsed = now - g._fadeOutStart;
-            const w = smoothstep(Math.max(0, 1 - (elapsed / GESTURE_FADE)));
-            g.weight = w;
-            if (w <= 0) {
-              g.stop(); g.dispose();
-              actor.fadingGestures.splice(i, 1);
-            }
-          }
-        }
-
-        // 3. Diagnostics & Snap Detection (Measures pose from PREVIOUS frame)
-        const isCurrentlyAnimating = actor.faceAnim || actor.gestureGroup || (actor.fadingGestures && actor.fadingGestures.length > 0) || actor._usingVRMATransition || (isTest && actor._testTransitionData?._fadeOutStart != null);
-        
-        if (actor._loading) {
-          actor.lastRotations = {};
-        }
-
-        if (isCurrentlyAnimating && !actor._loading) {
-          diagHtml += `<div style="color:#fff; text-decoration:underline;">Actor: ${actor.id}</div>`;
-          actor.lastRotations ??= {};
-          actor.physicalViolations ??= [];
-
-          const currentRots = {};
+        // Skip detection for first 3 frames after clip transitions (snap to new pose is expected)
+        if (actor._skipFrames > 0) {
+          actor._skipFrames--;
+          // Just update baseline
           for (const boneName of TRACKED_BONES) {
             const bone = actor.mgr.humanoidBone[boneName];
-            if (bone) {
-              const q = bone.rotationQuaternion || BABYLON.Quaternion.FromEulerAngles(bone.rotation.x, bone.rotation.y, bone.rotation.z);
-              const rot = q.toEulerAngles();
-              const deg = rot.scale(180/Math.PI);
-              currentRots[boneName] = q.clone();
-              
-              if (actor.lastRotations[boneName]) {
-                const lastQ = actor.lastRotations[boneName];
-                const dot = Math.abs(lastQ.x * q.x + lastQ.y * q.y + lastQ.z * q.z + lastQ.w * q.w);
-                const angle = 2 * Math.acos(Math.min(1, dot)) * (180/Math.PI);
-                
-                const isFirstFrame = actor.gestureGroup && (now - actor.gestureGroup._startTime < 0.1);
+            if (!bone) continue;
+            const q = bone.rotationQuaternion || BABYLON.Quaternion.FromEulerAngles(bone.rotation.x, bone.rotation.y, bone.rotation.z);
+            actor.lastRotations[boneName] = q.clone();
+          }
+          continue;
+        }
 
-                if (angle > SNAP_DETECTION_THRESHOLD && !isFirstFrame) {
-                  // Determine phase (fadeIn / steady / fadeOut)
-                  const td = actor._testTransitionData;
-                  let phase = 'none';
-                  if (td) {
-                    if (td._fadeOutStart != null) { phase = 'fadeOut'; }
-                    else {
-                      const txEnd = td._txStart != null ? td._txStart + (td._fadeWindowEnd ?? 0) : null;
-                      const inTx = txEnd != null ? now < txEnd : (now - (td._startTime || now)) < GESTURE_FADE;
-                      const settled = td._txStart == null || (now - td._txStart) >= 0.017;
-                      if (inTx && settled) phase = 'fadeIn';
-                      else if (!inTx) phase = 'steady';
-                    }
-                  }
-                  actor.physicalViolations.push({
-                    bone: boneName, angle: +angle.toFixed(2), time: now,
-                    gesture: actor.gestureGroup?.name || 'fading',
-                    phase
-                  });
-                  console.warn(`[PHYSICAL VIOLATION] ${actor.id} ${boneName} snapped ${angle.toFixed(1)}° at ${now.toFixed(2)}s [${phase}]`);
-                }
-              }
-              diagHtml += `<div>${boneName.padEnd(14)}: ${deg.x.toFixed(1)}, ${deg.y.toFixed(1)}, ${deg.z.toFixed(1)}</div>`;
+        const SNAP_DETECTION_THRESHOLD = 10.0;
+        actor.physicalViolations ??= [];
+        let anyPlaying = false;
+
+        for (const boneName of TRACKED_BONES) {
+          const bone = actor.mgr.humanoidBone[boneName];
+          if (!bone) continue;
+          const q = bone.rotationQuaternion || BABYLON.Quaternion.FromEulerAngles(bone.rotation.x, bone.rotation.y, bone.rotation.z);
+          if (actor.lastRotations[boneName]) {
+            const lastQ = actor.lastRotations[boneName];
+            const dot = Math.abs(lastQ.x * q.x + lastQ.y * q.y + lastQ.z * q.z + lastQ.w * q.w);
+            const angle = 2 * Math.acos(Math.min(1, dot)) * (180 / Math.PI);
+            if (angle > SNAP_DETECTION_THRESHOLD) {
+              actor.physicalViolations.push({ type: 'snap', bone: boneName, angle: +angle.toFixed(2), time: now });
             }
           }
-          actor.lastRotations = currentRots;
+          actor.lastRotations[boneName] = q.clone();
 
-          // Collect metrics for automated test
-          if (isTest && actor._testTransitionData) {
-            const td = actor._testTransitionData;
-            const rots = sampleNodeRotations();
-            const t = now - (td._startTime || now);
-
-            const hipsBone = actor.mgr?.humanoidBone?.['hips'];
-            const hipsPos = hipsBone ? hipsBone.getAbsolutePosition().clone() : null;
-            if (td._fadeOutStart != null) {
-              td.fadeOutFrames.push({ t, rots, hipsPos });
-            } else {
-              const txEnd = td._txStart != null ? td._txStart + (td._fadeWindowEnd ?? 0) : null;
-              const inTx = txEnd != null ? now < txEnd : (now - (td._startTime || now)) < GESTURE_FADE;
-              const settled = td._txStart == null || (now - td._txStart) >= 0.017;
-              if (inTx && settled) td.fadeInFrames.push({ t, rots, hipsPos });
-              else if (!inTx) td.steadyFrames.push({ t, rots, hipsPos });
+          // Show bone rotation in diag if any group is playing
+          if (actor._bodyGroup?.isPlaying || actor._idleGroup?.isPlaying) {
+            anyPlaying = true;
+            if (diagHtml === '' || !diagHtml.includes(`underline;">Actor: ${actor.id}</div>`)) {
+              diagHtml += `<div style="color:#fff; text-decoration:underline;">Actor: ${actor.id}</div>`;
             }
+            const euler = q.toEulerAngles();
+            const deg = euler.scale(180 / Math.PI);
+            diagHtml += `<div>${boneName.padEnd(14)}: ${deg.x.toFixed(1)}, ${deg.y.toFixed(1)}, ${deg.z.toFixed(1)}</div>`;
           }
+        }
 
+        if (anyPlaying) {
           if (actor.physicalViolations.length > 0) diagHtml += `<div style="color:#f00;">Violations: ${actor.physicalViolations.length}</div>`;
           diagHtml += '<br/>';
-        } else {
-          actor.lastRotations = {};
         }
       }
 
@@ -480,24 +358,54 @@
       } else {
         diagEl.style.display = 'none';
       }
+
+      if (SHOW_HUD) {
+        const hudEl = document.getElementById('anim-hud');
+        if (hudEl) {
+          hudEl.style.display = 'block';
+          let html = '';
+          for (const actor of Object.values(actors)) {
+            const name = actor.id || '?';
+            const isBody = actor._bodyGroup?.isPlaying;
+            const isIdle = actor._idleGroup?.isPlaying;
+            if (isBody) {
+              html += `<div><b>${name}</b> &rarr; <span style="color:#8cf">gesture</span></div>`;
+            } else if (isIdle) {
+              html += `<div><b>${name}</b> <span style="color:#6a6">idle</span></div>`;
+            } else {
+              html += `<div><b>${name}</b> <span style="color:#666">stopped</span></div>`;
+            }
+          }
+          hudEl.innerHTML = html;
+        }
+      }
     });
 
-    function startDiagnostics() {
-      scene.onAfterAnimationsObservable.add(() => {
-        for (const actor of Object.values(actors)) {
-          // 0. POSE BRIDGE: Force-hold previous pose (Runs AFTER animations to overwrite retargeter snaps)
-          if (actor._bridgePose && actor._bridgeFrames > 0) {
-            actor._bridgePose.forEach((q, bone) => {
-              if (!bone.rotationQuaternion) bone.rotationQuaternion = BABYLON.Quaternion.Identity();
-              bone.rotationQuaternion.copyFrom(q);
-            });
-            actor._bridgeFrames--;
-          }
-        }
-      });
+    // Sync diagnostic lastRotations to current bone state (prevents snapping detection
+    // from babylon-vrm-loader corruption between pre-load save and restore)
+    function syncRotations(actor) {
+      if (!actor.lastRotations) actor.lastRotations = {};
+      const bones = actor.mgr?.humanoidBone;
+      if (!bones) return;
+      for (const boneName of TRACKED_BONES) {
+        const bone = bones[boneName];
+        if (!bone) continue;
+        const q = bone.rotationQuaternion || BABYLON.Quaternion.FromEulerAngles(bone.rotation.x, bone.rotation.y, bone.rotation.z);
+        actor.lastRotations[boneName] = q.clone();
+      }
     }
 
     // ── Timeline event player ──────────────────────────────────────────────────
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    async function playVRMA(group) {
+      const frameCount = (group.to - group.from) || 0;
+      const duration = frameCount / 60 / (group.speedRatio || 1);
+      if (duration <= 0) return;
+      group.start(false, 1.0, group.from, group.to, false);
+      await sleep(duration * 1000);
+    }
+
     async function playEvent(event) {
       const actor = actors[event.actor];
       if (!actor) return;
@@ -505,170 +413,47 @@
       speakerEl.textContent = event.actor.toUpperCase();
       lineEl.textContent    = event.description ?? '';
 
-      // 1. POSE PRESERVATION: Record current state BEFORE any modifications or async loads
-      const bridgePose = new Map();
-      const fullSnapshot = new Map();
-      
-      for (const boneName in actor.mgr.humanoidBone) {
-        const bone = actor.mgr.humanoidBone[boneName];
-        if (!bone || (!bone.rotation && !bone.rotationQuaternion)) continue;
-        
-        let q;
-        if (bone.rotationQuaternion) {
-          q = bone.rotationQuaternion.clone();
-        } else if (bone.rotation) {
-          q = BABYLON.Quaternion.FromEulerAngles(bone.rotation.x, bone.rotation.y, bone.rotation.z);
-        } else {
-          q = new BABYLON.Quaternion();
-        }
-        
-        fullSnapshot.set(bone, q);
-        bridgePose.set(bone, q.clone());
-      }
-      
-      actor._bridgePose = bridgePose;
-      actor._bridgeFrames = 300; 
-
-      if (actor.gestureGroup) {
-        actor.fadingGestures ??= [];
-        const oldG = actor.gestureGroup;
-        oldG._fadeOutStart = performance.now() / 1000;
-        actor.fadingGestures.push(oldG);
-        actor.gestureGroup = null;
-      }
-      resetFace(actor);
-      actor.lastRotations = {};
-
-      // Load body VRMA
-      const clipDef = event.clip || event.layers?.BODY;
-      if (clipDef) {
-        const clipUrl = typeof clipDef === 'string' ? resolveAsset(clipDef) : resolveAsset(clipDef.url);
-        actor._loading = true; 
-        const g = await loadAndRetargetVRMA(actor, clipUrl, 'gesture', { fixRootPosition: false });
-        actor._loading = false;
-        
-        if (g) {
-          const gestureGroup = cloneRetargetedGroup(g, `${actor.id}-gesture`);
-
-          if (USE_VRMA_TRANSITION) {
-            const txGen = new TransitionGenerator(scene);
-            const idleGroup = actor.idleGroup;
-
-            const startPoseMap = {};
-            for (const ta of gestureGroup.targetedAnimations) {
-              const bone = ta.target;
-              if (bone && fullSnapshot.has(bone)) startPoseMap[bone.name] = fullSnapshot.get(bone);
-            }
-
-            const { frameIndex: entryFrame } = txGen.findBestEntryFrame(gestureGroup, startPoseMap);
-            
-            const entryPose = txGen.evaluateFrame(gestureGroup, entryFrame);
-            const idlePose = txGen.snapshotPose(idleGroup);
-            
-            let maxAngleDeg = 0;
-            const targetedBones = gestureGroup.targetedAnimations.map(ta => ta.target).filter(Boolean);
-            const idleBones = new Set(idleGroup.targetedAnimations.map(ta => ta.target).filter(Boolean));
-
-            for (const bone of targetedBones) {
-              const qG = entryPose[bone.name];
-              const qI = idlePose[bone.name] || fullSnapshot.get(bone) || BABYLON.Quaternion.Identity();
-              const qS = startPoseMap[bone.name] || qI;
-              
-              let qTarget = qG;
-              if (idleBones.has(bone)) {
-                let qIClamped = qI.clone();
-                if (BABYLON.Quaternion.Dot(qG, qIClamped) < 0) qIClamped.scaleInPlace(-1);
-                qTarget = BABYLON.Quaternion.Slerp(qIClamped, qG, 0.5);
-              }
-
-              let qTargetClamped = qTarget.clone();
-              if (BABYLON.Quaternion.Dot(qS, qTargetClamped) < 0) qTargetClamped.scaleInPlace(-1);
-              const angle = 2 * Math.acos(Math.min(1, Math.abs(BABYLON.Quaternion.Dot(qS, qTargetClamped)))) * 180 / Math.PI;
-              if (angle > maxAngleDeg) maxAngleDeg = angle;
-            }
-
-            const adaptiveFrames = Math.min(MAX_TX_FRAMES, Math.max(MIN_TX_FRAMES, Math.ceil(maxAngleDeg / TARGET_DEG_PER_FRAME)));
-            const txSeconds = adaptiveFrames / 60;
-            
-            if (isTest) {
-              actor._pendingAngularDistDeg = maxAngleDeg;
-              actor._pendingTxSeconds = txSeconds;
-              actor._pendingTxStart = performance.now() / 1000;
-            }
-
-            actor._usingVRMATransition = true;
-            actor.gestureGroup = gestureGroup;
-            gestureGroup._startTime = performance.now() / 1000; 
-
-            gestureGroup.start(false, 1.0, entryFrame, gestureGroup.to, false);
-            gestureGroup.pause();
-            gestureGroup.goToFrame(entryFrame);
-            gestureGroup.weight = 0;
-
-            let frameCounter = 0;
-            const liveStartPose = new Map();
-
-            actor._txCleanup = scene.onAfterAnimationsObservable.add(() => {
-              if (!actor._usingVRMATransition) return;
-
-              if (frameCounter === 0) {
-                 for (const bone of targetedBones) {
-                   liveStartPose.set(bone, (bone.rotationQuaternion || BABYLON.Quaternion.FromEulerAngles(bone.rotation.x, bone.rotation.y, bone.rotation.z)).clone());
-                 }
-                 actor._bridgePose = null;
-                 actor._bridgeFrames = 0;
-                 actor.lastRotations = {}; 
-              }
-
-              const t = Math.min(frameCounter / adaptiveFrames, 1.0);
-              const easedT = t; 
-              
-              for (const bone of targetedBones) {
-                if (!bone.rotationQuaternion) bone.rotationQuaternion = BABYLON.Quaternion.Identity();
-                
-                const qS = liveStartPose.get(bone) || BABYLON.Quaternion.Identity();
-                const qG = txGen.evaluateBoneAtFrame(gestureGroup, bone, entryFrame);
-                
-                const qI = bone.rotationQuaternion.clone();
-
-                let qTarget = qG.clone();
-                if (idleBones.has(bone)) {
-                  // Align idle with gesture for correct blend
-                  let qIClamped = qI.clone();
-                  if (BABYLON.Quaternion.Dot(qTarget, qIClamped) < 0) qIClamped.scaleInPlace(-1);
-                  qTarget = BABYLON.Quaternion.Slerp(qIClamped, qTarget, 0.5);
-                }
-
-                // Align moving target with start pose to ensure shortest path
-                if (BABYLON.Quaternion.Dot(qS, qTarget) < 0) qTarget.scaleInPlace(-1);
-                
-                const resultQ = BABYLON.Quaternion.Slerp(qS, qTarget, easedT);
-                bone.rotationQuaternion.copyFrom(resultQ);
-              }
-
-              if (frameCounter >= adaptiveFrames) {
-                gestureGroup.weight = 1;
-                gestureGroup.play(false);
-                actor._usingVRMATransition = false;
-                if (actor._txCleanup) {
-                  scene.onAfterAnimationsObservable.remove(actor._txCleanup);
-                  actor._txCleanup = null;
-                }
-                return;
-              }
-              frameCounter++;
-            });
-            console.log(`[scene] VRMA transition (dynamic): ${adaptiveFrames}fr (${txSeconds.toFixed(2)}s), entry ${entryFrame}, ${maxAngleDeg.toFixed(1)}°`);
-          } else if (USE_INERTIAL) {
-            // ... (Inertial code remains same)
-          } else if (USE_MATCH_CROSSFADE) {
-            // ... (Match code remains same)
-          } else if (USE_WEIGHT_TRANSITION) {
-            // ... (Weight code remains same)
-          }
-        }
+      // Mute idle for speaking actor (keeps running at weight 0, no restart snap)
+      if (actor._idleGroup) {
+        actor._idleGroup.weight = 0;
       }
 
+      // Set box position/rotation
+      if (event.boxPosition) {
+        actor.box.position.set(event.boxPosition.x, event.boxPosition.y, event.boxPosition.z);
+      }
+      if (event.boxRotation) {
+        const r = event.boxRotation;
+        actor.box.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(
+          r.x * Math.PI/180, r.y * Math.PI/180, r.z * Math.PI/180
+        );
+      }
+
+      // Stop previous body animation
+      if (actor._bodyGroup) {
+        actor._bodyGroup.stop();
+        actor._bodyGroup.dispose();
+        actor._bodyGroup = null;
+      }
+
+      // Load and play body clip
+      const clipURL = resolveAsset(event.clip);
+      const bodyGroup = await loadVRMA(actor, clipURL, 'body');
+      if (bodyGroup) {
+        // Reset baseline after load
+        syncRotations(actor);
+        bodyGroup.speedRatio = event.speed || 1.0;
+
+        // Smooth transition from current pose (idle) to gesture start
+        actor.blender.startTransition(bodyGroup, 0, 0.1, 0.25);
+
+        bodyGroup.start(false, 1.0, bodyGroup.from, bodyGroup.to, false);
+        actor._bodyGroup = bodyGroup;
+        actor._prevClip = event.clip;
+        actor._skipFrames = 3;
+      }
+
+      // Load face data
       const faceURL = resolveAsset(event.lipSync || event.layers?.FACE);
       const fa = await loadFaceJSON(faceURL);
       if (fa) {
@@ -676,281 +461,79 @@
         actor.faceAnim = fa;
       }
 
-      const maxDur = parseFloat(urlParams.get('maxdur')) || 0;
+      // Wait for event duration
+      const maxDur = parseFloat(new URLSearchParams(location.search).get('maxdur')) || 0;
       const dur = maxDur > 0 ? maxDur : (event.duration ?? 4);
       const start = performance.now();
-      
-      if (isTest) {
-        _testEventIdx++;
-        _testFrameDeltas[_testEventIdx] = { maxDeg: 0, worstBone: '', numBones: 0 };
-        actor._testTransitionData = {
-          evIdx: _testEventIdx, actorId: actor.id,
-          clipUrl: clipDef ? (typeof clipDef === 'string' ? clipDef : clipDef.url) : null,
-          hasGesture: !!actor.gestureGroup,
-          fadeInFrames: [], steadyFrames: [], fadeOutFrames: [],
-          _startTime: start / 1000,
-          _txStart: actor._pendingTxStart ?? null,
-          _fadeWindowEnd: actor._pendingTxSeconds ?? GESTURE_FADE,
-          transitionAngularDistDeg: actor._pendingAngularDistDeg ?? null,
-          maxKeyDeltaDeg: actor._pendingMaxKeyDelta ?? null,
-        };
-        actor._pendingAngularDistDeg = undefined;
-        actor._pendingTxSeconds = undefined;
-        actor._pendingTxStart = undefined;
-        actor._pendingMaxKeyDelta = undefined;
-      }
-
       await new Promise(resolve => {
-        let check = setInterval(() => {
+        const timer = setInterval(() => {
           const elapsed = (performance.now() - start) / 1000;
           progEl.style.width = (Math.min(elapsed / dur, 1) * 100).toFixed(1) + '%';
           if (elapsed >= dur) {
-            clearInterval(check);
+            clearInterval(timer);
             resolve();
           }
         }, 16);
       });
 
-      if (actor.gestureGroup) {
-        actor.gestureGroup._isStopping = true;
-        actor.gestureGroup._stopTime = performance.now() / 1000;
+      // Stop body clip and resume idle naturally (weight 1 — idle never stopped, no snap)
+      if (actor._bodyGroup) {
+        actor._bodyGroup.stop();
+        actor._bodyGroup.dispose();
+        actor._bodyGroup = null;
       }
 
-      // Fade-out capture: wait for gesture weight to reach 0 + settle
-      if (isTest && actor._testTransitionData && actor.gestureGroup) {
-        const td = actor._testTransitionData;
-        td._fadeOutStart = performance.now() / 1000;
-        const fadeWait = GESTURE_FADE + 0.2; // wait for full fade-out + settle
-        await new Promise(resolve => {
-          let check = setInterval(() => {
-            const elapsed = (performance.now() - start) / 1000;
-            progEl.style.width = (Math.min(elapsed / (dur + fadeWait), 1) * 100).toFixed(1) + '%';
-            if (elapsed >= dur + fadeWait) {
-              clearInterval(check);
-              resolve();
-            }
-          }, 16);
-        });
+      if (actor._idleGroup) {
+        // Smooth transition from gesture end back to idle
+        const curFrame = actor._idleGroup.animatables[0]?.masterFrame ?? 0;
+        actor.blender.startTransition(actor._idleGroup, Math.floor(curFrame), 0.1, 0.25);
+        actor._idleGroup.weight = 1;
+        actor._skipFrames = 3;
       }
-      
+
       progEl.style.width = '0%';
-      if (isTest && actor._testTransitionData) {
-         computeTransitionMetrics(actor._testTransitionData);
-      }
-    }
-
-    const _testFrameDeltas = []; let _testEventIdx = -1;
-
-    function sampleNodeRotations() {
-      const out = {};
-      for (const actor of Object.values(actors)) {
-        actor.root.getChildTransformNodes(false).forEach(node => {
-          const stack = [node];
-          while (stack.length > 0) {
-            const child = stack.pop();
-            if (child.name) {
-              const q = child.rotationQuaternion;
-              const r = child.rotation;
-              if (q) out[child.name] = q.clone();
-              else out[child.name] = BABYLON.Quaternion.RotationYawPitchRoll(r.y, r.x, r.z);
-            }
-            stack.push(...child.getChildTransformNodes(false));
-          }
-        });
-      }
-      return out;
-    }
-
-    function maxRotationDelta(before, after) {
-      let maxDeg = 0;
-      let worstBone = '';
-      for (const name of Object.keys(before)) {
-        const a = before[name], b = after[name];
-        if (!a || !b) continue;
-        const dot = Math.abs(a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w);
-        const deg = 2 * Math.acos(Math.min(1, dot)) * 57.2958;
-        if (deg > maxDeg) { maxDeg = deg; worstBone = name; }
-      }
-      return { maxDeg, worstBone, numBones: Object.keys(before).length };
-    }
-
-    function perBoneMaxDegPerFrame(frames, boneFilter) {
-      const perBone = {};
-      if (frames.length < 2) return perBone;
-      for (let i = 1; i < frames.length; i++) {
-        const before = frames[i-1].rots;
-        const after = frames[i].rots;
-        for (const name of Object.keys(before)) {
-          if (boneFilter && !boneFilter.has(name)) continue;
-          const a = before[name], b = after[name];
-          if (!a || !b) continue;
-          const dot = Math.abs(a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w);
-          const deg = 2 * Math.acos(Math.min(1, dot)) * 57.2958;
-          perBone[name] = Math.max(perBone[name] ?? 0, deg);
-        }
-      }
-      return perBone;
-    }
-
-    function maxFromPerBone(perBone) {
-      let maxDeg = 0, worstBone = '';
-      for (const [name, deg] of Object.entries(perBone)) {
-        if (deg > maxDeg) { maxDeg = deg; worstBone = name; }
-      }
-      return { maxDeg, worstBone };
-    }
-
-    function computeTransitionMetrics(data) {
-      const limbNames = getLimbNodeNames();
-      const limbFilter = limbNames.size > 0 ? limbNames : null;
-
-      // Per-frame Hips position deltas (translation snap)
-      function perFrameHipsDelta(frames) {
-        let maxDelta = 0;
-        for (let i = 1; i < frames.length; i++) {
-          const a = frames[i-1].hipsPos;
-          const b = frames[i].hipsPos;
-          if (a && b) {
-            const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
-            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-            if (dist > maxDelta) maxDelta = dist;
-          }
-        }
-        return maxDelta;
-      }
-      const hipFadeInDelta = perFrameHipsDelta(data.fadeInFrames);
-      const hipSteadyDelta = perFrameHipsDelta(data.steadyFrames);
-      const hipFadeOutDelta = perFrameHipsDelta(data.fadeOutFrames);
-
-      // Fade-in vs steady
-      let fadeInPB = perBoneMaxDegPerFrame(data.fadeInFrames, limbFilter);
-      let steadyPB = perBoneMaxDegPerFrame(data.steadyFrames, limbFilter);
-      const fadeIn = maxFromPerBone(fadeInPB);
-      const steady = maxFromPerBone(steadyPB);
-      const ftRatio = steady.maxDeg > 0.01 ? fadeIn.maxDeg / steady.maxDeg : (fadeIn.maxDeg > 0.01 ? 99 : 0);
-
-      // Fade-out vs steady
-      let fadeOutPB = perBoneMaxDegPerFrame(data.fadeOutFrames, limbFilter);
-      const fadeOut = maxFromPerBone(fadeOutPB);
-      const foRatio = steady.maxDeg > 0.01 ? fadeOut.maxDeg / steady.maxDeg : (fadeOut.maxDeg > 0.01 ? 99 : 0);
-
-      // Return snap: angle between last fade-out frame and last steady frame (same idle reference)
-      let returnSnapMaxDeg = 0, syncSnapMaxDeg = 0;
-      let worstBoneReturn = '', syncWorstBone = '';
-      const foFrames = data.fadeOutFrames;
-      if (foFrames.length >= 2) {
-        const lastFO = foFrames[foFrames.length - 1].rots;
-        const firstFO = foFrames[0].rots;
-        const steadyFrames = data.steadyFrames;
-        const lastSteady = steadyFrames.length > 0 ? steadyFrames[steadyFrames.length - 1].rots : firstFO;
-
-        for (const name of Object.keys(lastFO)) {
-          if (limbFilter && !limbFilter.has(name)) continue;
-          const snapQ = lastFO[name], refQ = lastSteady[name];
-          if (!snapQ || !refQ) continue;
-          const dot = Math.abs(snapQ.x*refQ.x + snapQ.y*refQ.y + snapQ.z*refQ.z + snapQ.w*refQ.w);
-          const deg = 2 * Math.acos(Math.min(1, dot)) * 57.2958;
-          if (deg > returnSnapMaxDeg) { returnSnapMaxDeg = deg; worstBoneReturn = name; }
-        }
-
-        // Sync snap: last fade-out vs first fade-out (immediate post-gesture snap)
-        for (const name of Object.keys(lastFO)) {
-          if (limbFilter && !limbFilter.has(name)) continue;
-          const snapQ = lastFO[name], refQ = firstFO[name];
-          if (!snapQ || !refQ) continue;
-          const dot = Math.abs(snapQ.x*refQ.x + snapQ.y*refQ.y + snapQ.z*refQ.z + snapQ.w*refQ.w);
-          const deg = 2 * Math.acos(Math.min(1, dot)) * 57.2958;
-          if (deg > syncSnapMaxDeg) { syncSnapMaxDeg = deg; syncWorstBone = name; }
-        }
-      }
-
-      _testFrameDeltas[data.evIdx].transition = {
-        actor: data.actorId, clip: data.clipUrl, hasGesture: data.hasGesture,
-        evIdx: data.evIdx,
-        fadeInMaxDegPerFrame: +fadeIn.maxDeg.toFixed(2),
-        steadyMaxDegPerFrame: +steady.maxDeg.toFixed(2),
-        fadeToSteadyRatio: +ftRatio.toFixed(1),
-        worstBoneFadeIn: { name: fadeIn.worstBone, degPerFrame: +fadeIn.maxDeg.toFixed(2) },
-        perBoneSteady: Object.fromEntries(Object.entries(steadyPB).map(([k,v]) => [k, +v.toFixed(2)])),
-        // Fade-out
-        fadeOutMaxDegPerFrame: +fadeOut.maxDeg.toFixed(2),
-        fadeOutToSteadyRatio: +foRatio.toFixed(1),
-        worstBoneFadeOut: { name: fadeOut.worstBone, degPerFrame: +fadeOut.maxDeg.toFixed(2) },
-        perBoneFadeOut: Object.fromEntries(Object.entries(fadeOutPB).map(([k,v]) => [k, +v.toFixed(2)])),
-        // Return snap
-        returnSnapMaxDeg: +returnSnapMaxDeg.toFixed(2),
-        worstBoneReturn: { name: worstBoneReturn, deg: +returnSnapMaxDeg.toFixed(2) },
-        perBoneReturnSnap: (() => {
-          const m = {};
-          if (foFrames.length >= 2) {
-            const lastFO = foFrames[foFrames.length - 1].rots;
-            const steadyFrames = data.steadyFrames;
-            const lastSteady = steadyFrames.length > 0 ? steadyFrames[steadyFrames.length - 1].rots : foFrames[0].rots;
-            for (const name of Object.keys(lastFO)) {
-              if (limbFilter && !limbFilter.has(name)) continue;
-              const snapQ = lastFO[name], refQ = lastSteady[name];
-              if (!snapQ || !refQ) continue;
-              const dot = Math.abs(snapQ.x*refQ.x + snapQ.y*refQ.y + snapQ.z*refQ.z + snapQ.w*refQ.w);
-              m[name] = +(2 * Math.acos(Math.min(1, dot)) * 57.2958).toFixed(2);
-            }
-          }
-          return m;
-        })(),
-        syncSnapMaxDeg: +syncSnapMaxDeg.toFixed(2),
-        syncWorstBone,
-        // Angular distance from start pose
-        transitionAngularDistDeg: data.transitionAngularDistDeg ?? null,
-        // Hips position deltas
-        hipPosMaxDeltaFadeIn: +hipFadeInDelta.toFixed(4),
-        hipPosMaxDeltaSteady: +hipSteadyDelta.toFixed(4),
-        hipPosMaxDeltaFadeOut: +hipFadeOutDelta.toFixed(4),
-        hipPosReturnSnap: (() => {
-          const foFrames = data.fadeOutFrames;
-          const stFrames = data.steadyFrames;
-          if (foFrames.length < 1 || stFrames.length < 1) return null;
-          const lastFO = foFrames[foFrames.length - 1].hipsPos;
-          const lastSt = stFrames[stFrames.length - 1].hipsPos;
-          if (!lastFO || !lastSt) return null;
-          const dx = lastFO.x - lastSt.x, dy = lastFO.y - lastSt.y, dz = lastFO.z - lastSt.z;
-          return +Math.sqrt(dx*dx + dy*dy + dz*dz).toFixed(4);
-        })(),
-      };
     }
 
     async function runScene() {
       const timeline = sceneData.timeline ?? [];
-      _testFrameDeltas.length = 0;
       for (let i = 0; i < timeline.length; i++) {
         await playEvent(timeline[i]);
-        await new Promise(r => setTimeout(r, 400));
+        await sleep(400);
       }
       speakerEl.textContent = '';
-      lineEl.textContent    = '— end —';
+      lineEl.textContent    = '&mdash; end &mdash;';
+
       if (isTest) {
-        const overallMax = _testFrameDeltas.reduce((m, d) => Math.max(m, d.maxDeg), 0);
-        const SNAP_THRESH = parseFloat(urlParams.get('snap')) || 1.0;
         const allViolations = Object.values(actors).flatMap(a => a.physicalViolations || []);
-        const phaseCounts = { fadeIn: 0, steady: 0, fadeOut: 0, none: 0 };
-        for (const v of allViolations) { if (phaseCounts[v.phase] !== undefined) phaseCounts[v.phase]++; }
         window.__TEST_DATA = {
           completed: true,
-          maxBoneRotationDeg: +overallMax.toFixed(2),
           physicalViolations: allViolations,
-          violationsByPhase: phaseCounts,
-          transitionSmooth: {
-            thresholds: { FADE_TO_STEADY_RATIO: 3.0, RETURN_SNAP_DEG: SNAP_THRESH },
-            events: _testFrameDeltas.map(d => d.transition ?? null).filter(Boolean)
-          }
+          maxSnapDeg: allViolations.length > 0 ? Math.max(...allViolations.map(v => v.angle)) : 0,
+          violationCount: allViolations.length,
         };
         document.body.setAttribute('data-status', 'complete');
       }
     }
 
+    // ── Load actors ────────────────────────────────────────────────────────────
     for (const actorDef of (sceneData.actors ?? [])) {
       await loadActor(actorDef);
     }
 
-    // Build tracked bones from all loaded actors (non-finger humanoid bones)
+    // Start idle loops for all actors (plays while other actor speaks)
+    for (const actor of Object.values(actors)) {
+      if (actor._idleClipName) {
+        const idleUrl = resolveAsset(`vrma/${actor._idleClipName}.vrma`);
+        const idleGroup = await loadVRMA(actor, idleUrl, `${actor.id}-idle`);
+        if (idleGroup) {
+          idleGroup.start(false, 1.0, idleGroup.from, idleGroup.to, true);
+          actor._idleGroup = idleGroup;
+          actor._skipFrames = 3;
+        }
+      }
+    }
+
+    // Build tracked bones from all loaded actors
     const allKeys = new Set();
     for (const actor of Object.values(actors)) {
       if (!actor.mgr?.humanoidBone) continue;
@@ -961,8 +544,7 @@
     }
     if (allKeys.size > 0) TRACKED_BONES = [...allKeys];
 
-    startDiagnostics();
-
+    // ── Start ──────────────────────────────────────────────────────────────────
     if (isTest) {
       loadEl.style.display = 'none';
       engine.runRenderLoop(() => { scene.render(); });
@@ -970,13 +552,19 @@
       runScene();
     } else {
       loadEl.style.display = 'none';
-      lineEl.textContent   = 'Click to begin';
-      speakerEl.textContent = '';
-      await new Promise(resolve => canvas.addEventListener('click', resolve, { once: true }));
-      lineEl.textContent = '';
-      engine.runRenderLoop(() => { scene.render(); });
-      window.addEventListener('resize', () => engine.resize());
-      runScene();
+      if (SHOW_HUD) {
+        engine.runRenderLoop(() => { scene.render(); });
+        window.addEventListener('resize', () => engine.resize());
+        runScene();
+      } else {
+        lineEl.textContent   = 'Click to begin';
+        speakerEl.textContent = '';
+        await new Promise(resolve => canvas.addEventListener('click', resolve, { once: true }));
+        lineEl.textContent = '';
+        engine.runRenderLoop(() => { scene.render(); });
+        window.addEventListener('resize', () => engine.resize());
+        runScene();
+      }
     }
   </script>
 </body>
