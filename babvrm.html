@@ -42,9 +42,9 @@
     BABYLON.TransformNode.prototype.getTotalVertices ??= function() { return 0; };
 
     const params = new URLSearchParams(window.location.search);
-    const VRM_FILE  = params.get('model') || 'models/AIAN/AIAN_F_1_Busi.vrm';
+    const VRM_FILE  = params.get('model') || 'models/AIAN/AIAN_F_1_Casual.vrm';
     // On GitHub Pages, only the first VRM per category is deployed (1GB limit).
-    // Use ?model=<path> to select a different model, e.g. ?model=models/AIAN/AIAN_F_1_Casual.vrm
+    // Use ?model=<path> to select a different model, e.g. ?model=models/AIAN/AIAN_F_1_Busi.vrm
     // VRMA from hash (e.g. babvrm.html#vrma/13_29.vrma), else random
     const HASH_VRMA = location.hash.slice(1) || null;
 
