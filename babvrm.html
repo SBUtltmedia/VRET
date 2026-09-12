@@ -42,9 +42,9 @@
     BABYLON.TransformNode.prototype.getTotalVertices ??= function() { return 0; };
 
     const params = new URLSearchParams(window.location.search);
-    const VRM_FILE  = params.get('model') || 'models/AIAN/AIAN_F_1_Casual.vrm';
-    // Use local models directory; vrm-cdn-helper.js will resolve to CDN only if models exist there.
-    // If running on GitHub Pages without local models, set VRM_FILE via ?model=<cdn-url> parameter.
+    const VRM_FILE  = params.get('model') || 'models/AIAN/AIAN_F_1_Busi.vrm';
+    // On GitHub Pages, only the first VRM per category is deployed (1GB limit).
+    // Use ?model=<path> to select a different model, e.g. ?model=models/AIAN/AIAN_F_1_Casual.vrm
     // VRMA from hash (e.g. babvrm.html#vrma/13_29.vrma), else random
     const HASH_VRMA = location.hash.slice(1) || null;
 
